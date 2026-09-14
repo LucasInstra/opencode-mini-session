@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
 import { Show } from "solid-js";
+import { adaptTheme, type TuiContext } from "../opencode";
 
 type ActionButtonProps = {
-  api: TuiPluginApi;
+  api: TuiContext;
   label: string;
   keybind?: string;
   disabled?: boolean;
@@ -11,7 +11,7 @@ type ActionButtonProps = {
 };
 
 export function ActionButton(props: ActionButtonProps) {
-  const theme = props.api.theme.current;
+  const theme = adaptTheme(props.api.theme);
 
   return (
     <box

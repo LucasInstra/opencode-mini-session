@@ -1,15 +1,16 @@
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
-import type { Part } from "@opencode-ai/sdk/v2";
-import type { SessionEntry } from "./types";
+import type { SessionMessageInfo } from "@opencode/client";
+import type { SessionEntry, SessionPart } from "./types";
 
 export function getSessionEntries(
-  api: TuiPluginApi,
-  sessionID: string,
+  messages: readonly SessionMessageInfo[],
 ): SessionEntry[] {
-  return api.state.session.messages(sessionID).map((info) => ({
-    info,
-    parts: [...api.state.part(info.id)],
-  }));
+  const entries: SessionEntry[] = [];
+  for (const info of messages) {
+    const parts = getMessageParts(info);
+    if (parts.length === 0) continue;
+    entries.push({ info, parts });
+  }
+  return entries;
 }
 
 export function formatFullContext(entries: SessionEntry[], tokenLimit: number) {
@@ -55,6 +56,62 @@ export function buildCopiedContext(entries: SessionEntry[], tokenLimit: number) 
   };
 }
 
+export function getMessageParts(info: SessionMessageInfo): SessionPart[] {
+  if (info.type === "user") {
+    const text = info.text.trim();
+    return text ? [{ type: "text", text }] : [];
+  }
+
+  if (info.type === "assistant") {
+    const parts: SessionPart[] = [];
+    for (const content of info.content) {
+      if (content.type === "text") {
+        if (content.text.trim()) parts.push({ type: "text", text: content.text.trim() });
+        continue;
+      }
+      if (content.type === "reasoning") {
+        if (content.text.trim()) {
+          parts.push({
+            type: "reasoning",
+            text: content.text.trim(),
+            time: content.time
+              ? { created: content.time.created, completed: content.time.completed }
+              : undefined,
+          });
+        }
+        continue;
+      }
+      if (content.type === "tool") {
+        parts.push({
+          type: "tool",
+          name: content.name,
+          status: content.state.status,
+          input: getToolInput(content.state),
+          title: getToolTitle(content.state),
+        });
+      }
+    }
+    return parts;
+  }
+
+  return [];
+}
+
+function getToolInput(state: { status: string; input?: unknown }): Record<string, unknown> | undefined {
+  if (!state.input || typeof state.input !== "object" || Array.isArray(state.input)) {
+    return undefined;
+  }
+  return state.input as Record<string, unknown>;
+}
+
+function getToolTitle(state: unknown): string | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const metadata = (state as { metadata?: unknown }).metadata;
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const title = (metadata as { title?: unknown }).title;
+  return typeof title === "string" && title.trim() ? title : undefined;
+}
+
 function formatEntry(entry: SessionEntry) {
   const lines: string[] = [];
 
@@ -64,16 +121,16 @@ function formatEntry(entry: SessionEntry) {
   }
 
   if (lines.length === 0) return "";
-  return `${entry.info.role}:\n${lines.join("\n")}`;
+  return `${entry.info.type}:\n${lines.join("\n")}`;
 }
 
-function formatToolPart(part: Extract<Part, { type: "tool" }>) {
-  const pairs = Object.entries(part.state.input ?? {})
+function formatToolPart(part: Extract<SessionPart, { type: "tool" }>) {
+  const pairs = Object.entries(part.input ?? {})
     .slice(0, 4)
     .map(([key, value]) => `${key}=${summarizeValue(value)}`);
   return pairs.length > 0
-    ? `[tool: ${part.tool} ${pairs.join(" ")}]`
-    : `[tool: ${part.tool}]`;
+    ? `[tool: ${part.name} ${pairs.join(" ")}]`
+    : `[tool: ${part.name}]`;
 }
 
 function summarizeValue(value: unknown): string {
