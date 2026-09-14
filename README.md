@@ -22,27 +22,27 @@ Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with n
 
 ## Installation
 
+> Requires OpenCode V2 (`opencode >= 2`).
+
 ### Automatic
 
 Just install the plugin with the OpenCode plugin manager:
 
 ```sh
-opencode plugin opencode-mini-session --global
+opencode plugin add opencode-mini-session
 ```
 
 ### Manual
 
-Add to your OpenCode TUI config (`~/.config/opencode/tui.json`):
+Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
 
 ```json
 {
-  "plugin": [
+  "plugins": [
     "opencode-mini-session"
   ]
 }
 ```
-
-OpenCode installs it automatically with Bun on startup.
 
 ## Keybinds
 
@@ -61,7 +61,7 @@ OpenCode installs it automatically with Bun on startup.
 | Key | Action |
 |---|---|
 | `enter` | Send question / follow-up |
-| `shift+enter` | Inject mini transcript into the main thread |
+| `shift+enter` | Continue in the main thread (queues the mini transcript into the session) |
 | `alt+b` or `alt+n` (configurable) | Hide overlay, resumable |
 | `ctrl+t` (configurable) | Toggle thinking blocks |
 | `tab` | Change the model for the next question |
@@ -86,24 +86,27 @@ If you want to customize the plugin, your config should look something like this
 
 ```json
 {
-  "plugin": [
-    ["opencode-mini-session", {
-      "model": "anthropic/claude-sonnet-4.6",
-      "variant": "high",
-      "tokenLimit": 10000,
-      "keybind": "alt+m",
-      "freshKeybind": "alt+f",
-      "enableThinking": true,
-      "toggleThinkingKeybind": "alt+a",
-      "agent": "build"
-    }]
+  "plugins": [
+    {
+      "package": "opencode-mini-session",
+      "options": {
+        "model": "anthropic/claude-sonnet-4.6",
+        "variant": "high",
+        "tokenLimit": 10000,
+        "keybind": "alt+m",
+        "freshKeybind": "alt+f",
+        "enableThinking": true,
+        "toggleThinkingKeybind": "alt+a",
+        "agent": "build"
+      }
+    }
   ]
 }
 ```
 
 ## Agents and permissions
 
-If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only tools: `glob`, `grep`, `list`, `read`, and `webfetch`.
+If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only permissions: `read`, `glob`, `grep`, and `webfetch`.
 
 To customize permissions, tone, instructions, or other behavior, set `agent` to an existing OpenCode agent name. The plugin will use that agent's settings directly.
 
@@ -113,8 +116,11 @@ For example, configure mini to use a custom `pirate` agent:
 
 ```json
 {
-  "plugin": [
-    ["opencode-mini-session", { "agent": "pirate" }]
+  "plugins": [
+    {
+      "package": "opencode-mini-session",
+      "options": { "agent": "pirate" }
+    }
   ]
 }
 ```
@@ -140,11 +146,10 @@ Fresh mini mode skips this copied-context step entirely.
 If `/mini` is missing or the TUI does not load after updating OpenCode, close OpenCode and force a fresh plugin install:
 
 ```sh
-opencode plugin opencode-mini-session --global --force
+opencode plugin remove opencode-mini-session
+opencode plugin add opencode-mini-session
 opencode
 ```
-
-The plugin can only check for updates after its TUI has loaded, so an incompatible cached version cannot update itself.
 
 ### Clear the plugin cache
 
@@ -153,14 +158,14 @@ If refreshing the plugin does not work, close OpenCode, remove the cached npm pa
 Linux and macOS:
 
 ```sh
-rm -rf ~/.cache/opencode/node_modules/opencode-mini-session
+rm -rf ~/.cache/opencode/npm/opencode-mini-session@latest
 opencode
 ```
 
 Windows PowerShell:
 
 ```powershell
-Remove-Item -Recurse -Force "$HOME\.cache\opencode\node_modules\opencode-mini-session"
+Remove-Item -Recurse -Force "$HOME\.cache\opencode\npm\opencode-mini-session@latest"
 opencode
 ```
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { buildCopiedContext, getSessionEntries, resolveRuntimeMiniAgent } = vi.hoisted(
-  () => ({
+const { buildCopiedContext, getSessionEntries, resolveRuntimeMiniAgent } =
+  vi.hoisted(() => ({
     buildCopiedContext: vi.fn(() => ({
       text: "main context",
       usedTokens: 31_000,
@@ -9,8 +9,7 @@ const { buildCopiedContext, getSessionEntries, resolveRuntimeMiniAgent } = vi.ho
     })),
     getSessionEntries: vi.fn(() => []),
     resolveRuntimeMiniAgent: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock("../src/agent", async () => {
   const actual = await vi.importActual<typeof import("../src/agent")>(
@@ -30,11 +29,21 @@ vi.mock("../src/context", () => ({
 import { openMiniSession, startQuestion } from "../src/session";
 import type {
   ActiveDialogController,
-  OverlayState,
   MiniConfig,
   ModelPreferenceState,
+  OverlayState,
+  SessionEntry,
   ThinkingPreferenceState,
 } from "../src/types";
+
+const MODEL = {
+  id: "claude-sonnet-4.6",
+  modelID: "claude-sonnet-4.6",
+  providerID: "anthropic",
+  name: "Claude Sonnet 4.6",
+  limit: { context: 200_000, output: 8_000 },
+  variants: [{ id: "fast" }],
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -57,48 +66,54 @@ function config(): MiniConfig {
   };
 }
 
-function fakeApi() {
+function fakeCtx() {
   return {
-    state: {
-      provider: [
-        {
-          id: "anthropic",
-          name: "Anthropic",
-          models: {
-            "claude-sonnet-4.6": {
-              id: "claude-sonnet-4.6",
-              providerID: "anthropic",
-              name: "Claude Sonnet 4.6",
-              limit: { context: 200_000, output: 8_000 },
-              variants: { fast: {} },
-            },
-          },
-        },
-      ],
-      path: { directory: "/tmp/project" },
-    },
+    location: { directory: "/tmp/project" },
     renderer: {
       currentFocusedRenderable: undefined,
       requestRender: vi.fn(),
     },
     ui: {
-      toast: vi.fn(),
+      toast: { show: vi.fn() },
+      router: {
+        current: () => ({ type: "session", sessionID: "session-1" }),
+      },
     },
     client: {
       session: {
-        abort: vi.fn(),
-        create: vi.fn(async () => ({ data: { id: "mini-session" } })),
-        delete: vi.fn(),
-        promptAsync: vi.fn(),
+        context: vi.fn(async () => []),
+        create: vi.fn(async () => ({ id: "mini-session" })),
+        remove: vi.fn(async () => {}),
+        interrupt: vi.fn(async () => ({})),
+        prompt: vi.fn(async () => ({})),
+        switchModel: vi.fn(async () => {}),
+        instructions: { entry: { put: vi.fn(async () => {}) } },
+      },
+      model: {
+        list: vi.fn(async () => ({ data: [MODEL] })),
+        default: vi.fn(async () => ({ data: MODEL })),
+      },
+      provider: {
+        list: vi.fn(async () => ({
+          data: [{ id: "anthropic", name: "Anthropic" }],
+        })),
       },
     },
-    event: {
+    data: {
       on: vi.fn(() => () => {}),
     },
-    route: {
-      current: { name: "session", params: { sessionID: "session-1" } },
-    },
   } as any;
+}
+
+function captureHandlers(ctx: ReturnType<typeof fakeCtx>) {
+  const handlers: Record<string, (event: any) => void> = {};
+  ctx.data.on.mockImplementation(
+    (name: string, handler: (event: any) => void) => {
+      handlers[name] = handler;
+      return () => {};
+    },
+  );
+  return handlers;
 }
 
 function assistantEntry(options: {
@@ -108,19 +123,22 @@ function assistantEntry(options: {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   completed?: boolean;
-}) {
+}): SessionEntry {
   return {
     info: {
       id: options.id,
-      role: "assistant",
-      providerID: "anthropic",
-      modelID: "claude-sonnet-4.6",
-      variant: "fast",
-      time: options.completed ? { completed: Date.now() } : {},
+      type: "assistant",
+      agent: "build",
+      model: { id: "claude-sonnet-4.6", providerID: "anthropic", variant: "fast" },
+      time: options.completed
+        ? { created: 0, completed: Date.now() }
+        : { created: 0 },
       tokens:
         options.inputTokens !== undefined
           ? {
               input: options.inputTokens,
+              output: 0,
+              reasoning: 0,
               cache: {
                 read: options.cacheReadTokens ?? 0,
                 write: options.cacheWriteTokens ?? 0,
@@ -129,7 +147,7 @@ function assistantEntry(options: {
           : undefined,
     },
     parts: [{ type: "text", text: options.text }],
-  } as any;
+  } as unknown as SessionEntry;
 }
 
 function resolvedAgent() {
@@ -143,11 +161,13 @@ function resolvedAgent() {
   };
 }
 
-function fakeScroller(options: {
-  scrollTop?: number;
-  scrollHeight?: number;
-  viewportHeight?: number;
-} = {}) {
+function fakeScroller(
+  options: {
+    scrollTop?: number;
+    scrollHeight?: number;
+    viewportHeight?: number;
+  } = {},
+) {
   const scroller = {
     scrollTop: options.scrollTop ?? 0,
     scrollHeight: options.scrollHeight ?? 20,
@@ -171,6 +191,17 @@ function fakeScroller(options: {
   return scroller;
 }
 
+async function flushMicrotasks(times = 20) {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function flushTimers() {
+  await vi.advanceTimersByTimeAsync(0);
+  await flushMicrotasks();
+}
+
 async function flushScrollTimer() {
   await vi.advanceTimersByTimeAsync(0);
 }
@@ -190,12 +221,13 @@ afterEach(() => {
 
 describe("openMiniSession", () => {
   it("returns false and shows the active dialog when one is already open", () => {
+    vi.useFakeTimers();
     const activeDialog = {
       show: vi.fn(),
     } as any;
 
     const opened = openMiniSession(
-      fakeApi(),
+      fakeCtx(),
       config(),
       "main",
       vi.fn(),
@@ -209,20 +241,14 @@ describe("openMiniSession", () => {
     expect(activeDialog.show).toHaveBeenCalledOnce();
   });
 
-  it("returns true after creating a new dialog", () => {
-    resolveRuntimeMiniAgent.mockReturnValue({
-      mode: "plugin-managed",
-      requestedAgent: null,
-      agent: null,
-      permission: [],
-      permissionSource: "plugin-managed",
-      notices: [],
-    });
+  it("returns true after creating a new dialog", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     let activeDialog: ActiveDialogController | undefined;
 
     const opened = openMiniSession(
-      fakeApi(),
+      fakeCtx(),
       config(),
       "main",
       vi.fn(),
@@ -238,6 +264,7 @@ describe("openMiniSession", () => {
     );
 
     expect(opened).toBe(true);
+    await flushMicrotasks();
     expect(activeDialog).toBeDefined();
   });
 });
@@ -247,12 +274,8 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     let overlay: OverlayState | undefined;
     const scroller = fakeScroller({
       scrollTop: 30,
@@ -261,7 +284,7 @@ describe("startQuestion", () => {
     });
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -281,8 +304,8 @@ describe("startQuestion", () => {
     expect(scroller.scrollTo).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER);
 
     scroller.scrollHeight += 20;
-    handlers["session.next.text.delta"]({
-      properties: { sessionID: "mini-session", delta: "answer" },
+    handlers["session.text.delta"]({
+      data: { sessionID: "mini-session", delta: "answer" },
     });
     await flushStreamingRender();
 
@@ -294,12 +317,8 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     let overlay: OverlayState | undefined;
     const scroller = fakeScroller({
       scrollTop: 30,
@@ -308,7 +327,7 @@ describe("startQuestion", () => {
     });
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -327,8 +346,8 @@ describe("startQuestion", () => {
 
     scroller.scrollTop = 25;
     scroller.scrollHeight += 20;
-    handlers["session.next.text.delta"]({
-      properties: { sessionID: "mini-session", delta: "answer" },
+    handlers["session.text.delta"]({
+      data: { sessionID: "mini-session", delta: "answer" },
     });
     await flushStreamingRender();
 
@@ -337,10 +356,11 @@ describe("startQuestion", () => {
   });
 
   it("registers an active controller before agent resolution completes", async () => {
+    vi.useFakeTimers();
     const agentResolution = deferred<any>();
     resolveRuntimeMiniAgent.mockReturnValue(agentResolution.promise);
 
-    const api = fakeApi();
+    const ctx = fakeCtx();
     let activeDialog: ActiveDialogController | undefined;
     const active = {
       get: () => activeDialog,
@@ -358,7 +378,7 @@ describe("startQuestion", () => {
     };
 
     const opening = startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -369,29 +389,23 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(activeDialog).toBeDefined();
 
     await activeDialog?.close();
-    agentResolution.resolve({
-      mode: "plugin-managed",
-      requestedAgent: null,
-      agent: null,
-      permission: [],
-      permissionSource: "plugin-managed",
-      notices: [],
-    });
+    agentResolution.resolve(resolvedAgent());
 
     await opening;
     expect(activeDialog).toBeUndefined();
   });
 
   it("skips copied context formatting in fresh mode", async () => {
+    vi.useFakeTimers();
     const agentResolution = deferred<any>();
     resolveRuntimeMiniAgent.mockReturnValue(agentResolution.promise);
 
     const opening = startQuestion(
-      fakeApi(),
+      fakeCtx(),
       config(),
       "fresh",
       "session-1",
@@ -402,28 +416,22 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(buildCopiedContext).not.toHaveBeenCalled();
 
-    agentResolution.resolve({
-      mode: "plugin-managed",
-      requestedAgent: null,
-      agent: null,
-      permission: [],
-      permissionSource: "plugin-managed",
-      notices: [],
-    });
+    agentResolution.resolve(resolvedAgent());
 
     await opening;
   });
 
   it("shows copied-context usage when main mini opens", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     let overlay: OverlayState | undefined;
 
     await startQuestion(
-      fakeApi(),
+      fakeCtx(),
       config(),
       "main",
       "session-1",
@@ -450,12 +458,13 @@ describe("startQuestion", () => {
   });
 
   it("shows no counter when fresh mini opens", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     let overlay: OverlayState | undefined;
 
     await startQuestion(
-      fakeApi(),
+      fakeCtx(),
       config(),
       "fresh",
       "session-1",
@@ -475,7 +484,32 @@ describe("startQuestion", () => {
     });
   });
 
+  it("shows the update warning passed by the plugin", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    let overlay: OverlayState | undefined;
+
+    await startQuestion(
+      fakeCtx(),
+      config(),
+      "main",
+      "session-1",
+      ((next: OverlayState | undefined) => {
+        overlay = next;
+      }) as any,
+      { get: () => undefined, set: vi.fn() },
+      { get: () => undefined, set: vi.fn() },
+      { get: () => false, set: vi.fn() },
+      vi.fn(),
+      () => "New version available: 9.9.9.",
+    );
+
+    expect(overlay?.state.update).toBe("New version available: 9.9.9.");
+  });
+
   it("stores exact completed input tokens after session idle", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
@@ -486,12 +520,8 @@ describe("startQuestion", () => {
       }),
     ]);
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: () => ({
@@ -505,7 +535,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -518,7 +548,8 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
 
     expect(overlay?.state.lastCompletedMiniInputTokens).toBe(11_240);
     expect(overlay?.state.footerCounter.miniSession?.text).toBe("11.2K (6%)");
@@ -528,8 +559,8 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -538,10 +569,6 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: () => ({
@@ -555,7 +582,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -568,7 +595,8 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -579,8 +607,8 @@ describe("startQuestion", () => {
       assistantEntry({ id: "assistant-2", text: "streaming" }),
     ]);
 
-    handlers["session.next.text.delta"]({
-      properties: { sessionID: "mini-session", delta: "more" },
+    handlers["session.text.delta"]({
+      data: { sessionID: "mini-session", delta: "more" },
     });
     await flushStreamingRender();
 
@@ -589,10 +617,11 @@ describe("startQuestion", () => {
   });
 
   it("includes cached input tokens after later completed responses", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -601,10 +630,6 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: () => ({
@@ -618,7 +643,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -631,7 +656,8 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
 
     expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.2K (3%)");
 
@@ -651,17 +677,19 @@ describe("startQuestion", () => {
       }),
     ]);
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
 
     expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
     expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
   });
 
   it("treats a lower later input value as a one-time incremental delta", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -670,10 +698,6 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: () => ({
@@ -687,7 +711,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -700,7 +724,8 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -716,8 +741,10 @@ describe("startQuestion", () => {
       }),
     ]);
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
-    handlers["message.updated"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+    handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
+    await flushTimers();
 
     expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
     expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
@@ -726,10 +753,11 @@ describe("startQuestion", () => {
   it.each(["main", "fresh"] as const)(
     "increments the second completed response once in %s mode when updated before idle",
     async (mode) => {
+      vi.useFakeTimers();
       resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-      const handlers: Record<string, (event: any) => void> = {};
-      const api = fakeApi();
+      const ctx = fakeCtx();
+      const handlers = captureHandlers(ctx);
       (getSessionEntries as any).mockReturnValue([
         assistantEntry({
           id: "assistant-1",
@@ -738,10 +766,6 @@ describe("startQuestion", () => {
           completed: true,
         }),
       ]);
-      api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-        handlers[name] = handler;
-        return () => {};
-      });
       let overlay: OverlayState | undefined;
       const modelPreference: any = {
         get: () => ({
@@ -755,7 +779,7 @@ describe("startQuestion", () => {
       };
 
       await startQuestion(
-        api,
+        ctx,
         config(),
         mode,
         "session-1",
@@ -768,7 +792,8 @@ describe("startQuestion", () => {
         vi.fn(),
       );
 
-      handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+      handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+      await flushMicrotasks();
       expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_240);
 
       (getSessionEntries as any).mockReturnValue([
@@ -786,8 +811,10 @@ describe("startQuestion", () => {
         }),
       ]);
 
-      handlers["message.updated"]({ properties: { sessionID: "mini-session" } });
-      handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+      handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
+      await flushTimers();
+      handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+      await flushMicrotasks();
 
       expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
       expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
@@ -797,10 +824,11 @@ describe("startQuestion", () => {
   it.each(["main", "fresh"] as const)(
     "increments the second completed response once in %s mode when its total equals the previous counter",
     async (mode) => {
+      vi.useFakeTimers();
       resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-      const handlers: Record<string, (event: any) => void> = {};
-      const api = fakeApi();
+      const ctx = fakeCtx();
+      const handlers = captureHandlers(ctx);
       (getSessionEntries as any).mockReturnValue([
         assistantEntry({
           id: "assistant-1",
@@ -809,10 +837,6 @@ describe("startQuestion", () => {
           completed: true,
         }),
       ]);
-      api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-        handlers[name] = handler;
-        return () => {};
-      });
       let overlay: OverlayState | undefined;
       const modelPreference: any = {
         get: () => ({
@@ -826,7 +850,7 @@ describe("startQuestion", () => {
       };
 
       await startQuestion(
-        api,
+        ctx,
         config(),
         mode,
         "session-1",
@@ -839,7 +863,8 @@ describe("startQuestion", () => {
         vi.fn(),
       );
 
-      handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+      handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+      await flushMicrotasks();
       (getSessionEntries as any).mockReturnValue([
         assistantEntry({
           id: "assistant-1",
@@ -856,8 +881,10 @@ describe("startQuestion", () => {
         }),
       ]);
 
-      handlers["message.updated"]({ properties: { sessionID: "mini-session" } });
-      handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+      handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
+      await flushTimers();
+      handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+      await flushMicrotasks();
 
       expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
       expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
@@ -865,10 +892,11 @@ describe("startQuestion", () => {
   );
 
   it("updates completed input tokens when cache metadata arrives after idle", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const handlers: Record<string, (event: any) => void> = {};
-    const api = fakeApi();
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -877,10 +905,6 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    api.event.on.mockImplementation((name: string, handler: (event: any) => void) => {
-      handlers[name] = handler;
-      return () => {};
-    });
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: () => ({
@@ -894,7 +918,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -907,7 +931,8 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
         id: "assistant-1",
@@ -923,7 +948,8 @@ describe("startQuestion", () => {
       }),
     ]);
 
-    handlers["session.idle"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
     expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
 
     (getSessionEntries as any).mockReturnValue([
@@ -942,16 +968,18 @@ describe("startQuestion", () => {
       }),
     ]);
 
-    handlers["message.updated"]({ properties: { sessionID: "mini-session" } });
+    handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
+    await flushTimers();
 
     expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_994);
     expect(overlay?.state.footerCounter.miniSession?.text).toBe("6.0K (3%)");
   });
 
   it("recalculates percentages immediately after a model change", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const api = fakeApi();
+    const ctx = fakeCtx();
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: vi.fn(() => undefined),
@@ -959,7 +987,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -990,9 +1018,10 @@ describe("startQuestion", () => {
   });
 
   it("changes the placeholder only after the exact mini-session value crosses the limit threshold", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const api = fakeApi();
+    const ctx = fakeCtx();
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: vi.fn(() => undefined),
@@ -1000,7 +1029,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -1034,9 +1063,10 @@ describe("startQuestion", () => {
   });
 
   it("hides percentages and threshold effects when the model context window is unknown", async () => {
+    vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    const api = fakeApi();
+    const ctx = fakeCtx();
     let overlay: OverlayState | undefined;
     const modelPreference: any = {
       get: vi.fn(() => undefined),
@@ -1044,7 +1074,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -1076,14 +1106,15 @@ describe("startQuestion", () => {
   });
 
   it("uses the fresh keybind in the hide toast", async () => {
+    vi.useFakeTimers();
     const agentResolution = deferred<any>();
     resolveRuntimeMiniAgent.mockReturnValue(agentResolution.promise);
 
-    const api = fakeApi();
+    const ctx = fakeCtx();
     let activeDialog: ActiveDialogController | undefined;
 
     const opening = startQuestion(
-      api,
+      ctx,
       config(),
       "fresh",
       "session-1",
@@ -1099,35 +1130,29 @@ describe("startQuestion", () => {
       vi.fn(),
     );
 
-    await Promise.resolve();
+    await flushMicrotasks();
     activeDialog?.hide();
 
-    expect(api.ui.toast).toHaveBeenCalledWith(
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "mini hidden. Press alt+n to show it.",
       }),
     );
 
-    agentResolution.resolve({
-      mode: "plugin-managed",
-      requestedAgent: null,
-      agent: null,
-      permission: [],
-      permissionSource: "plugin-managed",
-      notices: [],
-    });
+    agentResolution.resolve(resolvedAgent());
 
     await opening;
   });
 
   it("closes and shows an error if agent resolution fails", async () => {
-    const api = fakeApi();
+    vi.useFakeTimers();
+    const ctx = fakeCtx();
     let activeDialog: ActiveDialogController | undefined;
 
     resolveRuntimeMiniAgent.mockRejectedValue(new Error("agent lookup failed"));
 
     const opening = startQuestion(
-      api,
+      ctx,
       config(),
       "main",
       "session-1",
@@ -1146,7 +1171,7 @@ describe("startQuestion", () => {
     await opening;
 
     expect(activeDialog).toBeUndefined();
-    expect(api.ui.toast).toHaveBeenCalledWith(
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
       expect.objectContaining({
         variant: "error",
         message: "Failed to open mini session: agent lookup failed",

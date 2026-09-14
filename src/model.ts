@@ -1,7 +1,7 @@
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
+import type { ModelInfo, ProviderInfo } from "@opencode/client";
 import type { ResolvedModel, SessionEntry } from "./types";
 
-export type ModelSource = "config" | "session" | "unknown";
+export type ModelSource = "config" | "session" | "default" | "unknown";
 
 export type ResolvedModelWithSource = {
   model: ResolvedModel;
@@ -13,6 +13,7 @@ export function resolveModel(
   modelOverride: string | null,
   variantOverride: string | null,
   entries: SessionEntry[],
+  fallbackModel?: ResolvedModel,
 ): ResolvedModelWithSource {
   if (modelOverride)
     return {
@@ -23,36 +24,24 @@ export function resolveModel(
       source: "config",
     };
 
-  let assistantFallback: ResolvedModel | undefined;
-
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const { info } = entries[index];
-    if (info.role === "user") {
-      return {
+    if (info.type !== "assistant") continue;
+    return {
+      model: {
         model: {
-          model: {
-            providerID: info.model.providerID,
-            modelID: info.model.modelID,
-          },
-          variant: info.model.variant,
+          providerID: info.model.providerID,
+          modelID: info.model.id,
         },
-        source: "session",
-      };
-    }
-
-    if (!assistantFallback) {
-      assistantFallback = {
-        model: {
-          providerID: info.providerID,
-          modelID: info.modelID,
-        },
-        variant: info.variant,
-      };
-    }
+        variant: info.model.variant,
+      },
+      source: "session",
+    };
   }
 
-  if (assistantFallback)
-    return { model: assistantFallback, source: "session" };
+  if (fallbackModel?.model) {
+    return { model: fallbackModel, source: "default" };
+  }
 
   return { model: {}, source: "unknown" };
 }
@@ -65,31 +54,39 @@ export function parseModelOverride(value: string) {
 }
 
 export function resolveDefaultModel(
-  providers: TuiPluginApi["state"]["provider"],
+  models: ModelInfo[],
   configuredModel: string | null,
   configuredVariant: string | null,
   entries: SessionEntry[],
+  fallbackModel?: ResolvedModel,
 ): ResolvedModelWithSource {
-  const resolved = resolveModel(configuredModel, configuredVariant, entries);
+  const resolved = resolveModel(
+    configuredModel,
+    configuredVariant,
+    entries,
+    fallbackModel,
+  );
   if (resolved.source !== "config") return resolved;
-  if (isAvailableModel(providers, resolved.model)) return resolved;
+  if (isAvailableModel(models, resolved.model)) return resolved;
 
   return {
-    ...resolveModel(null, null, entries),
+    ...resolveModel(null, null, entries, fallbackModel),
     notice: `Configured mini model ${formatResolvedModel(resolved.model)} was not found. The main session model will be used.`,
   };
 }
 
-function isAvailableModel(
-  providers: TuiPluginApi["state"]["provider"],
-  resolved: ResolvedModel,
-) {
+function isAvailableModel(models: ModelInfo[], resolved: ResolvedModel) {
   const model = resolved.model;
   if (!model) return false;
-  const available = providers.find((provider) => provider.id === model.providerID)
-    ?.models[model.modelID];
+  const available = models.find(
+    (candidate) =>
+      candidate.providerID === model.providerID && candidate.id === model.modelID,
+  );
   if (!available) return false;
-  return !resolved.variant || Boolean(available.variants?.[resolved.variant]);
+  return (
+    !resolved.variant ||
+    available.variants.some((variant) => variant.id === resolved.variant)
+  );
 }
 
 export function formatResolvedModel(resolved: ResolvedModel) {
@@ -99,12 +96,26 @@ export function formatResolvedModel(resolved: ResolvedModel) {
 }
 
 export function resolveModelContextWindow(
-  providers: TuiPluginApi["state"]["provider"],
+  models: ModelInfo[],
   resolved: ResolvedModel,
 ) {
   const model = resolved.model;
   if (!model) return undefined;
-  return providers.find((provider) => provider.id === model.providerID)?.models[
-    model.modelID
-  ]?.limit?.context;
+  return models.find(
+    (candidate) =>
+      candidate.providerID === model.providerID && candidate.id === model.modelID,
+  )?.limit?.context;
+}
+
+export function formatModelLabel(
+  model: Pick<ModelInfo, "id" | "name"> | undefined,
+  providers: ProviderInfo[],
+  resolved: ResolvedModel,
+) {
+  if (!resolved.model) return "default";
+  const provider = providers.find(
+    (candidate) => candidate.id === resolved.model!.providerID,
+  );
+  const name = provider ? `${provider.name}/${resolved.model.modelID}` : undefined;
+  return name ?? resolved.model.modelID;
 }

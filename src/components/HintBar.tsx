@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
 import { For } from "solid-js";
+import { adaptTheme, type TuiContext } from "../opencode";
 
 export type HintBarItem = {
   keybind: string | false;
@@ -8,10 +8,10 @@ export type HintBarItem = {
 };
 
 export function HintBar(props: {
-  api: TuiPluginApi;
+  api: TuiContext;
   items: HintBarItem[];
 }) {
-  const theme = props.api.theme.current;
+  const theme = adaptTheme(props.api.theme);
 
   return (
     <box flexDirection="row" gap={2}>

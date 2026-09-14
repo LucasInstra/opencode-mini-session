@@ -1,17 +1,3 @@
-export const MIN_KEYMAP_VERSION = "1.14.42";
-
-export function isVersionAtLeast(version: string, min: string): boolean {
-  const a = parseVersion(version);
-  const b = parseVersion(min);
-  if (!a || !b) return false;
-
-  for (let i = 0; i < 3; i++) {
-    if (a.parts[i] !== b.parts[i]) return a.parts[i] > b.parts[i];
-  }
-
-  return true;
-}
-
 export function isVersionNewer(latest: string, current: string) {
   const next = parseVersion(latest);
   const prev = parseVersion(current);
@@ -43,7 +29,9 @@ export function isVersionNewer(latest: string, current: string) {
 }
 
 export function parseVersion(version: string) {
-  const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.+)?$/);
+  const match = version.match(
+    /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.+)?$/,
+  );
   if (!match) return undefined;
   return {
     parts: [Number(match[1]), Number(match[2]), Number(match[3])],

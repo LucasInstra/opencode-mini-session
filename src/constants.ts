@@ -27,10 +27,9 @@ export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
 export const THINKING_TEXT = "Thinking...";
 
 export const SAFE_TOOLS = {
+  read: true,
   glob: true,
   grep: true,
-  list: true,
-  read: true,
   webfetch: true,
 };
 

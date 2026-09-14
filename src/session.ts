@@ -1,8 +1,5 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
-import type {
-  TuiDialogSelectOption,
-  TuiPluginApi,
-} from "@opencode-ai/plugin/tui";
+import type { ModelInfo, ProviderInfo, SessionMessageInfo } from "@opencode/client";
 import type { Setter } from "solid-js";
 import { version } from "../package.json";
 import { buildFooterCounterState } from "./counter";
@@ -23,6 +20,7 @@ import {
   resolveModelContextWindow,
   type ModelSource,
 } from "./model";
+import { getCurrentRoute, type TuiContext } from "./opencode";
 import type {
   ActiveDialog,
   AnswerDialogState,
@@ -43,13 +41,14 @@ type ModelSelectValue =
     };
 
 type ErrorPath =
-  | "promptAsync throw"
-  | "session.error event"
+  | "session.prompt throw"
+  | "session.execution.failed event"
   | "session.create throw";
 
+const SYSTEM_INSTRUCTION_KEY = "mini.system";
 
 export function openMiniSession(
-  api: TuiPluginApi,
+  ctx: TuiContext,
   config: MiniConfig,
   mode: MiniMode,
   setOverlay: Setter<OverlayState | undefined>,
@@ -59,10 +58,10 @@ export function openMiniSession(
   openPickerFn: (onAfterSelect: () => void) => void,
   getUpdateWarning?: () => string | undefined,
 ): boolean {
-  const currentRoute = api.route.current;
+  const route = getCurrentRoute(ctx);
 
-  if (currentRoute.name !== "session") {
-    api.ui.toast({
+  if (route.kind !== "session") {
+    ctx.ui.toast.show({
       variant: "error",
       message: "mini only works inside a session.",
     });
@@ -75,9 +74,9 @@ export function openMiniSession(
     return false;
   }
 
-  const { sessionID } = currentRoute.params as { sessionID: string };
+  const sessionID = route.sessionID;
   void startQuestion(
-    api,
+    ctx,
     config,
     mode,
     sessionID,
@@ -92,7 +91,7 @@ export function openMiniSession(
 }
 
 export async function startQuestion(
-  api: TuiPluginApi,
+  ctx: TuiContext,
   config: MiniConfig,
   mode: MiniMode,
   sessionID: string,
@@ -103,17 +102,24 @@ export async function startQuestion(
   openPickerFn: (onAfterSelect: () => void) => void,
   getUpdateWarning?: () => string | undefined,
 ) {
-  const entries = getSessionEntries(api, sessionID);
+  const [messages, models, providers, defaultModelResult] = await Promise.all([
+    fetchSessionMessages(ctx, sessionID),
+    fetchModels(ctx),
+    fetchProviders(ctx),
+    fetchDefaultModel(ctx),
+  ]);
+  const entries = getSessionEntries(messages);
   const copiedContext =
     mode === "main"
       ? buildCopiedContext(entries, config.tokenLimit)
       : { text: "", usedTokens: undefined, totalAvailableTokens: undefined };
   const context = copiedContext.text;
   const defaultResolvedModel = resolveDefaultModel(
-    api.state.provider,
+    models,
     config.model,
     config.variant,
     entries,
+    defaultModelResult,
   );
   const getResolvedModel = () =>
     modelPreference.get() ?? defaultResolvedModel.model;
@@ -121,7 +127,7 @@ export async function startQuestion(
   const hideKey = mode === "fresh" ? config.freshKeybind : config.keybind;
   const hiddenCommand = mode === "fresh" ? "/mini-fresh" : "/mini";
   const title = mode === "fresh" ? "mini fresh" : "mini session";
-  const previousFocus = api.renderer.currentFocusedRenderable;
+  const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
 
@@ -154,6 +160,7 @@ export async function startQuestion(
   let hidden = false;
   let continuing = false;
   let renderTimer: ReturnType<typeof setTimeout> | undefined;
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let scrollTimer: ReturnType<typeof setTimeout> | undefined;
   let focusTimer: ReturnType<typeof setTimeout> | undefined;
   let spinnerTimer: ReturnType<typeof setInterval> | undefined;
@@ -166,10 +173,11 @@ export async function startQuestion(
   let lastScrollHeight = 0;
   let currentTokenMessageID: string | undefined;
   const incrementedTokenMessageIDs = new Set<string>();
+  let sessionModelKey = formatSessionModelKey(defaultResolvedModel.model);
 
   const syncCounterState = () => {
     dialogState.modelContextWindow = resolveModelContextWindow(
-      api.state.provider,
+      models,
       getResolvedModel(),
     );
     dialogState.footerCounter = buildFooterCounterState({
@@ -202,6 +210,12 @@ export async function startQuestion(
     spinnerTimer = undefined;
   };
 
+  const clearRefreshTimer = () => {
+    if (!refreshTimer) return;
+    clearTimeout(refreshTimer);
+    refreshTimer = undefined;
+  };
+
   const startSpinnerTimer = () => {
     if (spinnerTimer || closed || hidden || !dialogState.loading) return;
     spinnerTimer = setInterval(() => {
@@ -221,7 +235,7 @@ export async function startQuestion(
       focusTimer = undefined;
       if (closed || hidden) return;
       overlayInput?.focus();
-      api.renderer.requestRender();
+      ctx.renderer.requestRender();
     }, 0);
   };
 
@@ -252,7 +266,7 @@ export async function startQuestion(
       overlayScroller?.scrollTo(Number.MAX_SAFE_INTEGER);
       updateScrollSnapshot();
       pendingScrollToBottom = false;
-      api.renderer.requestRender();
+      ctx.renderer.requestRender();
     }, 0);
   };
 
@@ -279,7 +293,7 @@ export async function startQuestion(
       if (previousFocus && !previousFocus.isDestroyed) {
         previousFocus.focus();
       }
-      api.renderer.requestRender();
+      ctx.renderer.requestRender();
     }, 0);
   };
 
@@ -293,9 +307,10 @@ export async function startQuestion(
     clearScrollTimer();
     clearFocusTimer();
     clearSpinnerTimer();
+    clearRefreshTimer();
     setOverlay(undefined);
     restorePreviousFocus();
-    api.ui.toast({
+    ctx.ui.toast.show({
       variant: "info",
       message: hideKey
         ? `mini hidden. Press ${hideKey} to show it.`
@@ -305,7 +320,7 @@ export async function startQuestion(
   };
 
   const closeFromUser = async () => {
-    api.ui.toast({
+    ctx.ui.toast.show({
       variant: "info",
       message: "mini session closed.",
       duration: 1000,
@@ -326,22 +341,17 @@ export async function startQuestion(
     clearScrollTimer();
     clearFocusTimer();
     clearSpinnerTimer();
+    clearRefreshTimer();
     setOverlay(undefined);
     restorePreviousFocus();
     if (!tempSessionID) return;
     const ephemeralSessionID = tempSessionID;
     tempSessionID = undefined;
     try {
-      await api.client.session.abort(
-        { sessionID: ephemeralSessionID },
-        { throwOnError: true },
-      );
+      await ctx.client.session.interrupt({ sessionID: ephemeralSessionID });
     } catch {}
     try {
-      await api.client.session.delete(
-        { sessionID: ephemeralSessionID },
-        { throwOnError: true },
-      );
+      await ctx.client.session.remove({ sessionID: ephemeralSessionID });
     } catch {}
   };
 
@@ -352,17 +362,18 @@ export async function startQuestion(
     continuing = true;
 
     try {
-      await api.client.tui.appendPrompt(
-        { text: buildContinuePrompt(transcript) },
-        { throwOnError: true },
-      );
-      api.ui.toast({
+      await ctx.client.session.prompt({
+        sessionID,
+        text: buildContinuePrompt(transcript),
+        delivery: "queue",
+      });
+      ctx.ui.toast.show({
         variant: "success",
-        message: "Side answer added to prompt.",
+        message: "Side answer queued in the main session.",
       });
       await cleanup();
     } catch (cause) {
-      api.ui.toast({
+      ctx.ui.toast.show({
         variant: "error",
         message: `Failed to continue in main thread: ${getErrorMessage(cause)}`,
       });
@@ -414,7 +425,7 @@ export async function startQuestion(
     }
     if (hidden) return;
     setOverlay({
-      api,
+      api: ctx,
       title,
       version,
       modelName: getModelName(),
@@ -487,10 +498,10 @@ export async function startQuestion(
   renderOverlay({ focusInput: true });
 
   try {
-    resolvedAgent = await resolveRuntimeMiniAgent(api, config);
+    resolvedAgent = await resolveRuntimeMiniAgent(ctx, config);
   } catch (cause) {
     if (closed) return;
-    api.ui.toast({
+    ctx.ui.toast.show({
       variant: "error",
       message: `Failed to open mini session: ${getErrorMessage(cause)}`,
     });
@@ -499,7 +510,12 @@ export async function startQuestion(
   }
 
   if (closed) return;
-  system = buildMiniSystemPrompt(context, resolvedAgent, mode);
+  system = buildMiniSystemPrompt(
+    context,
+    resolvedAgent,
+    mode,
+    ctx.location?.directory,
+  );
   dialogState.notice = formatMiniNotice(
     defaultResolvedModel.notice,
     ...resolvedAgent.notices,
@@ -510,14 +526,14 @@ export async function startQuestion(
     const prompt = value.trim();
     if (!prompt || closed) return false;
     if (dialogState.loading) {
-      api.ui.toast({
+      ctx.ui.toast.show({
         variant: "warning",
         message: "Wait for the current response.",
       });
       return false;
     }
     if (!tempSessionID) {
-      api.ui.toast({
+      ctx.ui.toast.show({
         variant: "warning",
         message: "mini session is still opening.",
       });
@@ -539,18 +555,27 @@ export async function startQuestion(
     void (async () => {
       try {
         const resolvedModel = getResolvedModel();
-        await api.client.session.promptAsync(
-          buildMiniPromptPayload(resolvedAgent, {
+        const nextModelKey = formatSessionModelKey(resolvedModel);
+        if (nextModelKey !== sessionModelKey) {
+          await ctx.client.session.switchModel({
             sessionID: promptSessionID,
-            system,
+            model: {
+              id: resolvedModel.model?.modelID ?? "",
+              providerID: resolvedModel.model?.providerID ?? "",
+              ...(resolvedModel.variant ? { variant: resolvedModel.variant } : {}),
+            },
+          });
+          sessionModelKey = nextModelKey;
+        }
+        await ctx.client.session.prompt(
+          buildMiniPromptPayload({
+            sessionID: promptSessionID,
             prompt,
-            resolvedModel,
           }),
-          { throwOnError: true },
         );
       } catch (cause) {
         if (closed) return;
-        setPromptError("promptAsync throw", cause);
+        setPromptError("session.prompt throw", cause);
         renderOverlay();
       }
     })();
@@ -559,22 +584,43 @@ export async function startQuestion(
   }
 
   try {
-    const created = await api.client.session.create(
+    const created = await ctx.client.session.create(
       buildMiniSessionCreatePayload(resolvedAgent, {
-        parentID: sessionID,
         title: "mini session",
-        directory: api.state.path.directory,
+        ...(ctx.location?.directory
+          ? { location: { directory: ctx.location.directory } }
+          : {}),
+        ...(defaultResolvedModel.model.model
+          ? {
+              model: {
+                id: defaultResolvedModel.model.model.modelID,
+                providerID: defaultResolvedModel.model.model.providerID,
+                ...(defaultResolvedModel.model.variant
+                  ? { variant: defaultResolvedModel.model.variant }
+                  : {}),
+              },
+            }
+          : {}),
       }),
-      { throwOnError: true },
     );
-    tempSessionID = created.data.id;
+    tempSessionID = created.id;
     const ephemeralSessionID = tempSessionID;
 
-    const refreshSession = () => {
-      dialogState.entries = getSessionEntries(api, ephemeralSessionID);
-      dialogState.streamingAnswer = "";
-      refreshLastCompletedMiniInputTokens();
-    };
+    if (system.trim()) {
+      try {
+        await ctx.client.session.instructions.entry.put({
+          sessionID: ephemeralSessionID,
+          key: SYSTEM_INSTRUCTION_KEY,
+          value: system,
+        });
+      } catch (cause) {
+        if (closed) return;
+        ctx.ui.toast.show({
+          variant: "warning",
+          message: `Failed to attach mini instructions: ${getErrorMessage(cause)}`,
+        });
+      }
+    }
 
     const refreshLastCompletedMiniInputTokens = () => {
       const latest = getLastCompletedMiniInputUsage(dialogState.entries);
@@ -600,71 +646,121 @@ export async function startQuestion(
       currentTokenMessageID = latest.messageID;
     };
 
+    const refreshSession = async () => {
+      if (closed || !tempSessionID) return;
+      const messages = await fetchSessionMessages(ctx, tempSessionID);
+      if (closed) return;
+      dialogState.entries = getSessionEntries(messages);
+      dialogState.streamingAnswer = "";
+      refreshLastCompletedMiniInputTokens();
+    };
+
+    const scheduleSessionRefresh = (delay = 50) => {
+      if (closed || refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = undefined;
+        void refreshSession()
+          .then(() => renderOverlay())
+          .catch(() => {});
+      }, delay);
+    };
+
+    const finishResponse = () => {
+      if (closed || !dialogState.loading) return;
+      const usedModel = submissionModelQueue.shift();
+      if (usedModel) {
+        for (const entry of dialogState.entries) {
+          if (
+            entry.info.type === "assistant" &&
+            !dialogState.messageModels[entry.info.id]
+          ) {
+            dialogState.messageModels[entry.info.id] = usedModel;
+          }
+        }
+      }
+      if (
+        !extractAssistantText(dialogState.entries) &&
+        !dialogState.streamingAnswer
+      ) {
+        dialogState.streamingAnswer = "No response generated.";
+      }
+      dialogState.loading = false;
+      clearSpinnerTimer();
+    };
+
     if (closed) {
       try {
-        await api.client.session.delete(
-          { sessionID: ephemeralSessionID },
-          { throwOnError: true },
-        );
+        await ctx.client.session.remove({ sessionID: ephemeralSessionID });
       } catch {}
       return;
     }
 
     unsubscribers.push(
-      api.event.on("session.idle", (event) => {
-        if (event.properties.sessionID !== tempSessionID) return;
-        const usedModel = submissionModelQueue.shift();
-        refreshSession();
-        if (usedModel) {
-          for (const entry of dialogState.entries) {
-            if (
-              entry.info.role === "assistant" &&
-              !dialogState.messageModels[entry.info.id]
-            ) {
-              dialogState.messageModels[entry.info.id] = usedModel;
-            }
-          }
-        }
-        if (!extractAssistantText(dialogState.entries)) {
-          dialogState.streamingAnswer = "No response generated.";
-        }
-        dialogState.loading = false;
-        clearSpinnerTimer();
+      ctx.data.on("session.idle", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        void refreshSession()
+          .then(() => {
+            finishResponse();
+            renderOverlay();
+          })
+          .catch(() => {});
+      }),
+    );
+
+    unsubscribers.push(
+      ctx.data.on("session.execution.succeeded", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        void refreshSession()
+          .then(() => {
+            finishResponse();
+            renderOverlay();
+          })
+          .catch(() => {});
+      }),
+    );
+
+    unsubscribers.push(
+      ctx.data.on("session.execution.failed", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        setPromptError("session.execution.failed event", event.data.error);
         renderOverlay();
       }),
     );
 
     unsubscribers.push(
-      api.event.on("message.updated", (event) => {
-        if (event.properties.sessionID !== tempSessionID) return;
-        refreshSession();
-        renderOverlay();
-      }),
-    );
-
-    unsubscribers.push(
-      api.event.on("session.next.text.delta", (event) => {
-        if (event.properties.sessionID !== tempSessionID) return;
-        dialogState.streamingAnswer += event.properties.delta;
+      ctx.data.on("session.text.delta", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        dialogState.streamingAnswer += event.data.delta;
         scheduleRenderOverlay();
       }),
     );
 
     unsubscribers.push(
-      api.event.on("message.part.updated", (event) => {
-        if (event.properties.sessionID !== tempSessionID) return;
-        refreshSession();
-        renderOverlay();
+      ctx.data.on("session.reasoning.delta", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        scheduleSessionRefresh(200);
       }),
     );
 
     unsubscribers.push(
-      api.event.on("session.error", (event) => {
-        if (event.properties.sessionID !== tempSessionID) return;
-        setPromptError("session.error event", event.properties.error);
-        renderOverlay();
+      ctx.data.on("session.text.ended", (event) => {
+        if (event.data.sessionID !== tempSessionID) return;
+        scheduleSessionRefresh(0);
       }),
     );
+
+    for (const toolEvent of [
+      "session.tool.called",
+      "session.tool.success",
+      "session.tool.failed",
+    ] as const) {
+      unsubscribers.push(
+        ctx.data.on(toolEvent, (event) => {
+          if (event.data.sessionID !== tempSessionID) return;
+          scheduleSessionRefresh(50);
+        }),
+      );
+    }
   } catch (cause) {
     if (closed) return;
     setPromptError("session.create throw", cause);
@@ -673,109 +769,138 @@ export async function startQuestion(
 }
 
 export function openModelPicker(
-  api: TuiPluginApi,
+  ctx: TuiContext,
   config: MiniConfig,
   sessionID: string,
   modelPreference: ModelPreferenceState,
   onAfterSelect?: () => void,
+  onOpenChange?: (open: boolean) => void,
 ) {
-  const { model: defaultModel, source: defaultSource } = resolveDefaultModel(
-    api.state.provider,
-    config.model,
-    config.variant,
-    getSessionEntries(api, sessionID),
-  );
-  const options = buildModelOptions(api, defaultModel, defaultSource);
+  onOpenChange?.(true);
+  void (async () => {
+    try {
+      const [messages, models, providers, defaultModelResult] = await Promise.all([
+        fetchSessionMessages(ctx, sessionID),
+        fetchModels(ctx),
+        fetchProviders(ctx),
+        fetchDefaultModel(ctx),
+      ]);
+      const entries = getSessionEntries(messages);
+      const { model: defaultModel } = resolveDefaultModel(
+        models,
+        config.model,
+        config.variant,
+        entries,
+        defaultModelResult,
+      );
+      const options = buildModelOptions(
+        models,
+        providers,
+        defaultModel,
+        defaultModelResult,
+      );
 
-  api.ui.dialog.setSize("large");
-  api.ui.dialog.replace(() =>
-    api.ui.DialogSelect<ModelSelectValue>({
-      title: "mini model",
-      placeholder: "Select model for future mini-session questions",
-      options,
-      onSelect: (option) => {
-        if (option.value.type === "default") {
-          modelPreference.set(undefined);
-          api.ui.toast({
-            variant: "success",
-            message: "mini model reset to default.",
-          });
-        } else {
-          modelPreference.set({
-            model: option.value.model,
-            variant: option.value.variant,
-          });
-          api.ui.toast({
-            variant: "success",
-            message: `mini model set to ${formatResolvedModel({
-              model: option.value.model,
-              variant: option.value.variant,
-            })}.`,
-          });
-        }
-        api.ui.dialog.clear();
-        onAfterSelect?.();
-      },
-    }),
-  );
+      const selected = await ctx.ui.dialog.select<ModelSelectValue>({
+        title: "Mini session model",
+        placeholder: "Select model for future mini-session questions",
+        options,
+      });
+
+      if (selected === undefined) return;
+      if (selected.type === "default") {
+        modelPreference.set(undefined);
+        ctx.ui.toast.show({
+          variant: "success",
+          message: "mini model reset to default.",
+        });
+      } else {
+        modelPreference.set({
+          model: selected.model,
+          variant: selected.variant,
+        });
+        ctx.ui.toast.show({
+          variant: "success",
+          message: `mini model set to ${formatResolvedModel({
+            model: selected.model,
+            variant: selected.variant,
+          })}.`,
+        });
+      }
+      onAfterSelect?.();
+    } catch (cause) {
+      ctx.ui.toast.show({
+        variant: "error",
+        message: `Failed to change mini model: ${getErrorMessage(cause)}`,
+      });
+    } finally {
+      onOpenChange?.(false);
+    }
+  })();
 }
 
 function buildModelOptions(
-  api: TuiPluginApi,
+  models: ModelInfo[],
+  providers: ProviderInfo[],
   defaultModel: ResolvedModel,
-  defaultSource: ModelSource,
-): TuiDialogSelectOption<ModelSelectValue>[] {
-  const providers = [...api.state.provider].sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  fallbackModel: ResolvedModel | undefined,
+): { title: string; value: ModelSelectValue; description?: string; category?: string }[] {
+  const providerName = (providerID: string) =>
+    providers.find((provider) => provider.id === providerID)?.name ?? providerID;
 
   const defaultModelName = defaultModel.model
-    ? providers.find((p) => p.id === defaultModel.model!.providerID)?.models[
-        defaultModel.model!.modelID
-      ]?.name || defaultModel.model!.modelID
-    : "default";
+    ? models.find(
+        (model) =>
+          model.providerID === defaultModel.model!.providerID &&
+          model.id === defaultModel.model!.modelID,
+      )?.name ?? defaultModel.model.modelID
+    : fallbackModel?.model?.modelID ?? "default";
 
-  const sourceLabel: Record<ModelSource, string> = {
-    config: "config",
-    session: "main session",
-    unknown: "unknown",
-  };
+  const sortedModels = [...models].sort((left, right) => {
+    const providerCompare = providerName(left.providerID).localeCompare(
+      providerName(right.providerID),
+    );
+    if (providerCompare !== 0) return providerCompare;
+    return left.name.localeCompare(right.name);
+  });
 
-  const options: TuiDialogSelectOption<ModelSelectValue>[] = [
+  const options: {
+    title: string;
+    value: ModelSelectValue;
+    description?: string;
+    category?: string;
+  }[] = [
     {
       title:
         defaultModelName +
         (defaultModel.variant ? ` (${defaultModel.variant})` : ""),
       value: { type: "default" },
-      description: `${formatResolvedModel(defaultModel)}`,
-      category: `Default [${sourceLabel[defaultSource]}]`,
+      description: formatResolvedModel(defaultModel),
+      category: "Default",
     },
   ];
 
-  for (const provider of providers) {
-    const models = Object.values(provider.models).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-    for (const model of models) {
-      const resolved = {
-        providerID: model.providerID,
-        modelID: model.id,
-      };
-      options.push({
-        title: model.name || model.id,
-        value: { type: "model", model: resolved },
-        description: `${provider.id}/${model.id}`,
-        category: provider.name,
-      });
+  for (const model of sortedModels) {
+    const resolved = {
+      providerID: model.providerID,
+      modelID: model.id,
+    };
+    const category = providerName(model.providerID);
+    options.push({
+      title: model.name || model.id,
+      value: { type: "model", model: resolved },
+      description: `${model.providerID}/${model.id}`,
+      category,
+    });
 
-      for (const variant of Object.keys(model.variants ?? {}).sort()) {
-        options.push({
-          title: `${model.name || model.id} (${variant})`,
-          value: { type: "model", model: resolved, variant },
-          description: `${provider.id}/${model.id}`,
-          category: provider.name,
-        });
-      }
+    for (const variant of model.variants
+      .map((candidate) => candidate.id)
+      .sort()) {
+      options.push({
+        title: `${model.name || model.id} (${variant})`,
+        value: { type: "model", model: resolved, variant },
+        description: `${model.providerID}/${model.id}`,
+        category,
+      });
     }
   }
 
@@ -787,7 +912,7 @@ export function extractAssistantText(
 ): string {
   const chunks: string[] = [];
   for (const entry of entries) {
-    if (entry.info.role !== "assistant") continue;
+    if (entry.info.type !== "assistant") continue;
     for (const part of entry.parts) {
       if (part.type === "text" && part.text.trim()) chunks.push(part.text);
     }
@@ -805,7 +930,7 @@ function buildMiniSessionTranscript(state: AnswerDialogState) {
         chunks.push(part.text.trim());
     }
     if (chunks.length > 0)
-      lines.push(`${entry.info.role}:\n${chunks.join("\n\n")}`);
+      lines.push(`${entry.info.type}:\n${chunks.join("\n\n")}`);
   }
 
   if (state.streamingAnswer.trim()) {
@@ -822,7 +947,7 @@ function buildContinuePrompt(transcript: string) {
 function getLastCompletedMiniInputUsage(entries: AnswerDialogState["entries"]) {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const info = entries[index]?.info;
-    if (info.role !== "assistant") continue;
+    if (info.type !== "assistant") continue;
     if (!info.time?.completed) continue;
     if (info.tokens) {
       return {
@@ -840,4 +965,51 @@ function getAssistantInputTokens(tokens: {
   cache?: { read?: number; write?: number };
 }) {
   return tokens.input + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0);
+}
+
+function formatSessionModelKey(resolved: ResolvedModel) {
+  if (!resolved.model) return "";
+  return `${resolved.model.providerID}/${resolved.model.modelID}${resolved.variant ? `#${resolved.variant}` : ""}`;
+}
+
+async function fetchSessionMessages(
+  ctx: TuiContext,
+  sessionID: string,
+): Promise<SessionMessageInfo[]> {
+  try {
+    return await ctx.client.session.context({ sessionID });
+  } catch {
+    return ctx.data.session.message.list(sessionID);
+  }
+}
+
+async function fetchModels(ctx: TuiContext): Promise<ModelInfo[]> {
+  try {
+    const result = await ctx.client.model.list();
+    if (Array.isArray(result.data)) return result.data;
+  } catch {}
+  return [];
+}
+
+async function fetchProviders(ctx: TuiContext): Promise<ProviderInfo[]> {
+  try {
+    const result = await ctx.client.provider.list();
+    if (Array.isArray(result.data)) return result.data;
+  } catch {}
+  return [];
+}
+
+async function fetchDefaultModel(
+  ctx: TuiContext,
+): Promise<ResolvedModel | undefined> {
+  try {
+    const result = await ctx.client.model.default();
+    const model = result.data;
+    if (model) {
+      return {
+        model: { providerID: model.providerID, modelID: model.id },
+      };
+    }
+  } catch {}
+  return undefined;
 }

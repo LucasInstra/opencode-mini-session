@@ -1,4 +1,4 @@
-import type { Agent, PermissionRuleset } from "@opencode-ai/sdk/v2";
+import type { AgentInfo, PermissionRule } from "@opencode/client";
 import { describe, expect, it } from "vitest";
 import {
   buildMiniErrorDetail,
@@ -8,6 +8,7 @@ import {
   resolveMiniAgent,
 } from "../src/agent";
 import { parseConfig } from "../src/config";
+import { DEFAULT_ALLOWED_TOOLS } from "../src/constants";
 import type { MiniConfig } from "../src/types";
 
 function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
@@ -26,20 +27,25 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
 
 function agent(
   name: string,
-  mode: Agent["mode"] = "primary",
+  mode: AgentInfo["mode"] = "primary",
   hidden = false,
-): Agent {
+): AgentInfo {
   return {
+    id: name,
     name,
     mode,
     hidden,
-    permission: [],
-    options: {},
-  };
+    request: {},
+    permissions: [],
+  } as unknown as AgentInfo;
 }
 
-function actionFor(rules: PermissionRuleset, permission: string) {
-  return rules.find((rule) => rule.permission === permission)?.action;
+function effectFor(rules: PermissionRule[], action: string) {
+  let effect: PermissionRule["effect"] | undefined;
+  for (const rule of rules) {
+    if (rule.action === action || rule.action === "*") effect = rule.effect;
+  }
+  return effect;
 }
 
 function asPluginManaged(resolved: ReturnType<typeof resolveMiniAgent>) {
@@ -77,8 +83,7 @@ describe("config parsing", () => {
   it("parses thinking keybind values", () => {
     expect(parseConfig({}).toggleThinkingKeybind).toBe("ctrl+t");
     expect(
-      parseConfig({ toggleThinkingKeybind: " ctrl+r " })
-        .toggleThinkingKeybind,
+      parseConfig({ toggleThinkingKeybind: " ctrl+r " }).toggleThinkingKeybind,
     ).toBe("ctrl+r");
     expect(
       parseConfig({ toggleThinkingKeybind: false }).toggleThinkingKeybind,
@@ -95,9 +100,7 @@ describe("config parsing", () => {
 
   it("parses fresh keybind values", () => {
     expect(parseConfig({}).freshKeybind).toBe("alt+n");
-    expect(parseConfig({ freshKeybind: " alt+f " }).freshKeybind).toBe(
-      "alt+f",
-    );
+    expect(parseConfig({ freshKeybind: " alt+f " }).freshKeybind).toBe("alt+f");
     expect(parseConfig({ freshKeybind: false }).freshKeybind).toBe(false);
     expect(parseConfig({ freshKeybind: "none" }).freshKeybind).toBe(false);
   });
@@ -105,9 +108,7 @@ describe("config parsing", () => {
 
 describe("agent resolution", () => {
   it("uses plugin-managed mode when agent is omitted", () => {
-    const resolved = asPluginManaged(
-      resolveMiniAgent(config(), [agent("build")], ["read"]),
-    );
+    const resolved = asPluginManaged(resolveMiniAgent(config(), [agent("build")]));
 
     expect(resolved.agent).toBeNull();
     expect(resolved.notices).toEqual([]);
@@ -116,11 +117,9 @@ describe("agent resolution", () => {
   it.each(["primary", "subagent", "all"] as const)(
     "accepts existing %s agents",
     (mode) => {
-      const resolved = resolveMiniAgent(
-        config({ agent: mode }),
-        [agent(mode, mode)],
-        ["read"],
-      );
+      const resolved = resolveMiniAgent(config({ agent: mode }), [
+        agent(mode, mode),
+      ]);
 
       expect(resolved.mode).toBe("custom-agent");
       expect(resolved.agent).toBe(mode);
@@ -129,11 +128,9 @@ describe("agent resolution", () => {
   );
 
   it("accepts hidden agents", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "summary" }),
-      [agent("summary", "subagent", true)],
-      ["read"],
-    );
+    const resolved = resolveMiniAgent(config({ agent: "summary" }), [
+      agent("summary", "subagent", true),
+    ]);
 
     expect(resolved.mode).toBe("custom-agent");
     expect(resolved.agent).toBe("summary");
@@ -141,11 +138,7 @@ describe("agent resolution", () => {
 
   it("falls back when the configured agent is missing", () => {
     const resolved = asPluginManaged(
-      resolveMiniAgent(
-        config({ agent: "missing" }),
-        [agent("build")],
-        ["read"],
-      ),
+      resolveMiniAgent(config({ agent: "missing" }), [agent("build")]),
     );
 
     expect(resolved.missingAgent).toBe("missing");
@@ -153,9 +146,7 @@ describe("agent resolution", () => {
   });
 
   it("falls back when the agent list is unavailable", () => {
-    const resolved = asPluginManaged(
-      resolveMiniAgent(config({ agent: "build" }), null, ["read"]),
-    );
+    const resolved = asPluginManaged(resolveMiniAgent(config({ agent: "build" }), null));
 
     expect(resolved.agent).toBeNull();
     expect(resolved.permissionSource).toBe("plugin-managed");
@@ -165,28 +156,23 @@ describe("agent resolution", () => {
 });
 
 describe("plugin-managed permissions", () => {
-  const availableTools = ["glob", "grep", "list", "read", "webfetch", "edit", "bash"];
+  it("allows only the default read actions", () => {
+    const resolved = asPluginManaged(resolveMiniAgent(config(), []));
 
-  it("allows the default read tools", () => {
-    const resolved = asPluginManaged(
-      resolveMiniAgent(config(), [], availableTools),
-    );
-
-    expect(actionFor(resolved.permission, "read")).toBe("allow");
-    expect(actionFor(resolved.permission, "grep")).toBe("allow");
-    expect(actionFor(resolved.permission, "edit")).toBe("deny");
-    expect(actionFor(resolved.permission, "bash")).toBe("deny");
+    for (const action of DEFAULT_ALLOWED_TOOLS) {
+      expect(effectFor(resolved.permission, action)).toBe("allow");
+    }
+    for (const action of ["edit", "shell", "subagent", "websearch"]) {
+      expect(effectFor(resolved.permission, action)).toBe("deny");
+    }
   });
-
 });
 
 describe("custom agent behavior", () => {
   it("omits plugin permissions", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "build" }),
-      [agent("build")],
-      ["read"],
-    );
+    const resolved = resolveMiniAgent(config({ agent: "build" }), [
+      agent("build"),
+    ]);
 
     expect(resolved.mode).toBe("custom-agent");
     expect(resolved.permission).toBeUndefined();
@@ -195,7 +181,7 @@ describe("custom agent behavior", () => {
 
 describe("system prompts", () => {
   it("includes the mini instruction and context in plugin-managed mode", () => {
-    const resolved = resolveMiniAgent(config(), [], ["read"]);
+    const resolved = resolveMiniAgent(config(), []);
     const prompt = buildMiniSystemPrompt("main context", resolved);
 
     expect(prompt).toContain(
@@ -206,8 +192,31 @@ describe("system prompts", () => {
     expect(prompt).not.toContain("configured OpenCode agent");
   });
 
+  it("guides file reads toward the read tool with the working directory", () => {
+    const resolved = resolveMiniAgent(config(), []);
+    const prompt = buildMiniSystemPrompt(
+      "main context",
+      resolved,
+      "main",
+      "/tmp/project",
+    );
+
+    expect(prompt).toContain("The working directory is /tmp/project.");
+    expect(prompt).toContain("Prefer the read tool to open files you can name");
+    expect(prompt).toContain(
+      "Use glob or grep only to locate paths you do not know",
+    );
+  });
+
+  it("omits the working directory note when it is unknown", () => {
+    const resolved = resolveMiniAgent(config(), []);
+    const prompt = buildMiniSystemPrompt("main context", resolved);
+
+    expect(prompt).not.toContain("The working directory is");
+  });
+
   it("omits session context tags in fresh plugin-managed mode", () => {
-    const resolved = resolveMiniAgent(config(), [], ["read"]);
+    const resolved = resolveMiniAgent(config(), []);
     const prompt = buildMiniSystemPrompt("", resolved, "fresh");
 
     expect(prompt).toContain(
@@ -218,11 +227,9 @@ describe("system prompts", () => {
   });
 
   it("includes custom agent guidance without tool wording in custom-agent mode", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "build" }),
-      [agent("build")],
-      ["read"],
-    );
+    const resolved = resolveMiniAgent(config({ agent: "build" }), [
+      agent("build"),
+    ]);
     const prompt = buildMiniSystemPrompt("main context", resolved);
 
     expect(prompt).toContain(
@@ -233,11 +240,9 @@ describe("system prompts", () => {
   });
 
   it("uses fresh custom-agent wording without context tags", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "build" }),
-      [agent("build")],
-      ["read"],
-    );
+    const resolved = resolveMiniAgent(config({ agent: "build" }), [
+      agent("build"),
+    ]);
     const prompt = buildMiniSystemPrompt("", resolved, "fresh");
 
     expect(prompt).toContain(
@@ -252,60 +257,46 @@ describe("system prompts", () => {
 });
 
 describe("payload helpers", () => {
-  it("omits agent in plugin-managed session and prompt payloads", () => {
-    const resolved = asPluginManaged(resolveMiniAgent(config(), [], ["read"]));
+  it("omits agent in plugin-managed session payloads", () => {
+    const resolved = asPluginManaged(resolveMiniAgent(config(), []));
     const createPayload = buildMiniSessionCreatePayload(resolved, {
-      parentID: "parent",
       title: "mini session",
-      directory: "/tmp/project",
-    });
-    const promptPayload = buildMiniPromptPayload(resolved, {
-      sessionID: "mini",
-      system: "system",
-      prompt: "question",
-      resolvedModel: {},
+      location: { directory: "/tmp/project" },
     });
 
     expect(createPayload).not.toHaveProperty("agent");
-    expect(createPayload.permission).toBeDefined();
-    expect(promptPayload).not.toHaveProperty("agent");
-    expect(promptPayload).not.toHaveProperty("tools");
+    expect(createPayload.permissions).toBeDefined();
   });
 
-  it("includes agent in custom agent session and prompt payloads", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "build" }),
-      [agent("build")],
-      ["read"],
-    );
+  it("includes agent in custom agent session payloads", () => {
+    const resolved = resolveMiniAgent(config({ agent: "build" }), [
+      agent("build"),
+    ]);
     const createPayload = buildMiniSessionCreatePayload(resolved, {
-      parentID: "parent",
       title: "mini session",
-      directory: "/tmp/project",
-    });
-    const promptPayload = buildMiniPromptPayload(resolved, {
-      sessionID: "mini",
-      system: "system",
-      prompt: "question",
-      resolvedModel: {},
     });
 
     expect(createPayload.agent).toBe("build");
-    expect(createPayload.permission).toBeUndefined();
-    expect(promptPayload.agent).toBe("build");
-    expect(promptPayload).not.toHaveProperty("tools");
+    expect(createPayload.permissions).toBeUndefined();
+  });
+
+  it("builds a plain text prompt payload", () => {
+    const payload = buildMiniPromptPayload({
+      sessionID: "mini",
+      prompt: "question",
+    });
+
+    expect(payload).toEqual({ sessionID: "mini", text: "question" });
   });
 });
 
 describe("notices and diagnostics", () => {
   it("includes mode, agent, and permission source diagnostics", () => {
-    const resolved = resolveMiniAgent(
-      config({ agent: "build" }),
-      [agent("build")],
-      ["read"],
-    );
+    const resolved = resolveMiniAgent(config({ agent: "build" }), [
+      agent("build"),
+    ]);
     const detail = buildMiniErrorDetail({
-      path: "promptAsync throw",
+      path: "session.prompt throw",
       sessionID: "mini",
       resolvedModel: {},
       resolvedAgent: resolved,

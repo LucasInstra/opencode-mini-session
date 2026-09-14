@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildCopiedContext, estimateTokens, formatFullContext } from "../src/context";
+import {
+  buildCopiedContext,
+  estimateTokens,
+  formatFullContext,
+} from "../src/context";
 import type { SessionEntry } from "../src/types";
 
-function entry(role: "user" | "assistant", text: string): SessionEntry {
+function entry(type: "user" | "assistant", text: string): SessionEntry {
   return {
-    info: { id: `${role}-${text}`, role } as SessionEntry["info"],
+    info: {
+      id: `${type}-${text}`,
+      type,
+      time: { created: 0 },
+    } as unknown as SessionEntry["info"],
     parts: [{ type: "text", text }],
-  } as SessionEntry;
+  };
 }
 
 describe("copied context", () => {
@@ -15,8 +23,10 @@ describe("copied context", () => {
 
     expect(buildCopiedContext(entries, 50)).toEqual({
       text: "user:\nhello\n\nassistant:\nworld",
-      usedTokens: estimateTokens("user:\nhello") + estimateTokens("assistant:\nworld"),
-      totalAvailableTokens: estimateTokens("user:\nhello") + estimateTokens("assistant:\nworld"),
+      usedTokens:
+        estimateTokens("user:\nhello") + estimateTokens("assistant:\nworld"),
+      totalAvailableTokens:
+        estimateTokens("user:\nhello") + estimateTokens("assistant:\nworld"),
     });
   });
 
@@ -24,7 +34,12 @@ describe("copied context", () => {
     const older = entry("user", "old message that should be dropped");
     const newer = entry("assistant", "newest message stays");
 
-    expect(buildCopiedContext([older, newer], estimateTokens("assistant:\nnewest message stays"))).toEqual({
+    expect(
+      buildCopiedContext(
+        [older, newer],
+        estimateTokens("assistant:\nnewest message stays"),
+      ),
+    ).toEqual({
       text: "assistant:\nnewest message stays",
       usedTokens: estimateTokens("assistant:\nnewest message stays"),
       totalAvailableTokens:
