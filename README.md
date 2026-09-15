@@ -177,6 +177,14 @@ Fresh mini mode skips this copied-context step entirely.
 
 ## Troubleshooting
 
+### Update the plugin
+
+The plugin checks the npm registry on startup and shows any newer version with the update command. Apply it with:
+
+```sh
+opencode plugin update opencode-mini-session
+```
+
 ### Refresh the plugin
 
 If `/mini` is missing or the TUI does not load after updating OpenCode, close OpenCode and force a fresh plugin install:
@@ -185,6 +193,18 @@ If `/mini` is missing or the TUI does not load after updating OpenCode, close Op
 opencode plugin remove opencode-mini-session
 opencode plugin add opencode-mini-session
 opencode
+```
+
+### `Invalid V2 TUI plugin module`
+
+The installed package is the 1.x release, which targets OpenCode 1. Install the 2.x release (see [Installation](#installation)) and restart OpenCode.
+
+### Git package installs are refused
+
+npm 12 disables packages fetched from Git by default (`allow-git=none`). Enable them before installing a `github:...` or `git+https://...` spec:
+
+```sh
+npm config set allow-git all
 ```
 
 ### Clear the plugin cache
