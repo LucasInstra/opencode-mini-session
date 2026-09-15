@@ -15,13 +15,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - run: npm ci
+      # bun install mirrors the publish workflow and satisfies the engines of
+      # @opentui/core (node >= 26.4 / bun >= 1.3), which npm on Node 24 only warns about.
+      - name: Install
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
         run: npm run typecheck
