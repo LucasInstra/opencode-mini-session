@@ -118,8 +118,11 @@ export function AnswerDialog(props: AnswerDialogProps) {
   const canContinue = createMemo(
     () =>
       !props.state.loading &&
-      !props.state.error &&
-      Boolean(extractAssistantText(props.state.entries)),
+      (props.continueOnError || !props.state.error) &&
+      Boolean(
+        extractAssistantText(props.state.entries) ||
+        props.state.streamingAnswer.trim(),
+      ),
   );
   const createUserMessageHint = createMemo(() =>
     getCreateUserMessageHint(props.state),
@@ -812,6 +815,7 @@ export function createOverlaySlot(options: {
             hideKey={current().hideKey}
             toggleThinkingKeybind={current().toggleThinkingKeybind}
             continueLabel={current().continueLabel}
+            continueOnError={current().continueOnError}
             state={current().state}
             onScroller={current().onScroller}
             onInput={current().onInput}
