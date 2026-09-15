@@ -88,4 +88,28 @@ describe("global keymap commands", () => {
       ["fresh", "hi"],
     ]);
   });
+
+  it("wires the handoff command with the base prompt and extra instructions", () => {
+    const calls: Array<[string, string | undefined, boolean | undefined]> = [];
+    const commands = buildGlobalCommands(
+      actions((mode, _source, question, handoff) => {
+        calls.push([mode, question, handoff]);
+      }),
+    );
+
+    const handoff = commands.find((command) => command.id === "mini.handoff");
+    expect(handoff?.slash).toEqual({ name: "mini-handoff", arguments: true });
+
+    handoff?.run?.("/mini-handoff focus on tests");
+    expect(calls[0]?.[0]).toBe("main");
+    expect(calls[0]?.[2]).toBe(true);
+    expect(calls[0]?.[1]).toContain("handoff document");
+    expect(calls[0]?.[1]).toContain(
+      "Additional instructions from the user: focus on tests",
+    );
+
+    handoff?.run?.("/mini-handoff");
+    expect(calls[1]?.[1]).toContain("handoff document");
+    expect(calls[1]?.[1]).not.toContain("Additional instructions");
+  });
 });

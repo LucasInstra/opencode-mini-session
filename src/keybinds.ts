@@ -3,6 +3,7 @@ import {
   CMD_CHANGE_MODEL,
   CMD_CLOSE,
   CMD_CONTINUE,
+  CMD_HANDOFF,
   CMD_HIDE,
   CMD_OPEN,
   CMD_OPEN_FRESH,
@@ -15,6 +16,7 @@ import {
   CMD_TOGGLE_FRESH,
   CMD_TOGGLE_MAIN,
   CMD_TOGGLE_THINKING,
+  HANDOFF_PROMPT,
   SCROLL_LINE_DELTA,
   SCROLL_PAGE_DELTA,
 } from "./constants";
@@ -28,6 +30,7 @@ export type MiniKeybindActions = {
     mode: MiniMode,
     source: "command" | "keybind",
     initialQuestion?: string,
+    handoff?: boolean,
   ) => void;
   openModelPicker: () => void;
   hideOverlay: () => void;
@@ -52,6 +55,13 @@ export function parseSlashQuestion(
     .replace(new RegExp(`^/${commandName}(?:\\s+|$)`, "i"), "")
     .trim();
   return question ? question : undefined;
+}
+
+function buildHandoffPrompt(input: string | undefined) {
+  const extra = parseSlashQuestion(input, "mini-handoff");
+  return extra
+    ? `${HANDOFF_PROMPT}\n\nAdditional instructions from the user: ${extra}`
+    : HANDOFF_PROMPT;
 }
 
 export function buildGlobalCommands(
@@ -123,6 +133,18 @@ export function buildGlobalCommands(
       slash: { name: "mini-model" },
       enabled: onSession,
       run: () => openModelPicker(),
+    },
+    {
+      id: CMD_HANDOFF,
+      title: "Mini session handoff",
+      description:
+        "Write a handoff document from this session to paste into a new one (/mini-handoff [instructions])",
+      group: "Mini session",
+      palette: true,
+      slash: { name: "mini-handoff", arguments: true },
+      enabled: onSession,
+      run: (input) =>
+        triggerMiniMode("main", "command", buildHandoffPrompt(input), true),
     },
   ];
 }

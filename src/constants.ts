@@ -16,6 +16,7 @@ export const CMD_PAGE_DOWN = "mini.page-down";
 export const CMD_SUBMIT = "mini.submit";
 export const CMD_SCROLL_TOP = "mini.scroll-top";
 export const CMD_SCROLL_BOTTOM = "mini.scroll-bottom";
+export const CMD_HANDOFF = "mini.handoff";
 
 export const SCROLL_LINE_DELTA = 4;
 export const SCROLL_PAGE_DELTA = 14;
@@ -51,3 +52,10 @@ export const MINI_SESSION_METADATA_KEY = "opencodeMiniSession";
 
 /** Mini sessions older than this are treated as leaked by a crashed client. */
 export const STALE_MINI_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Initial question for `/mini-handoff`: turns the copied session context into a
+ * document that can be pasted into a fresh session.
+ */
+export const HANDOFF_PROMPT =
+  "You are summarizing an existing work session into a handoff document, so the work can continue in a new session with no memory of this conversation. Write the handoff from the copied session context only; do not investigate the workspace and do not call tools. If the context is empty or insufficient, say so briefly instead of guessing. Produce a concise markdown handoff with: goal and current status, key decisions and why, files/paths/commands involved, verification already done and its result, open questions, and next concrete steps. Reply with the handoff document only, in the same language as the session context; do not add an introduction or a closing comment.";
