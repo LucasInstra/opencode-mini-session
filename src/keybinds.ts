@@ -24,7 +24,11 @@ export type MiniKeybindActions = {
   config: MiniConfig;
   isOverlayOpen: () => boolean;
   onSession: () => boolean;
-  triggerMiniMode: (mode: MiniMode, source: "command" | "keybind") => void;
+  triggerMiniMode: (
+    mode: MiniMode,
+    source: "command" | "keybind",
+    initialQuestion?: string,
+  ) => void;
   openModelPicker: () => void;
   hideOverlay: () => void;
   closeOverlay: () => void;
@@ -34,6 +38,11 @@ export type MiniKeybindActions = {
   scrollBy: (delta: number) => void;
   scrollTo: (position: number) => void;
 };
+
+function parseSlashQuestion(input: string | undefined) {
+  const question = input?.trim();
+  return question ? question : undefined;
+}
 
 export function buildGlobalCommands(
   actions: MiniKeybindActions,
@@ -70,22 +79,26 @@ export function buildGlobalCommands(
     {
       id: CMD_OPEN,
       title: "Mini session",
-      description: "Open a mini session for side questions",
+      description:
+        "Open a mini session for side questions (/mini <question> asks immediately)",
       group: "Mini session",
       palette: true,
-      slash: { name: "mini" },
+      slash: { name: "mini", arguments: true },
       enabled: onSession,
-      run: () => triggerMiniMode("main", "command"),
+      run: (input) =>
+        triggerMiniMode("main", "command", parseSlashQuestion(input)),
     },
     {
       id: CMD_OPEN_FRESH,
       title: "Mini session (fresh)",
-      description: "Open a mini session without copied context",
+      description:
+        "Open a mini session without copied context (/mini-fresh <question> asks immediately)",
       group: "Mini session",
       palette: true,
-      slash: { name: "mini-fresh" },
+      slash: { name: "mini-fresh", arguments: true },
       enabled: onSession,
-      run: () => triggerMiniMode("fresh", "command"),
+      run: (input) =>
+        triggerMiniMode("fresh", "command", parseSlashQuestion(input)),
     },
     {
       id: CMD_CHANGE_MODEL,

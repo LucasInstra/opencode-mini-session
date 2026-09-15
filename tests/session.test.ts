@@ -26,7 +26,11 @@ vi.mock("../src/context", () => ({
   buildCopiedContext,
 }));
 
-import { openMiniSession, startQuestion } from "../src/session";
+import {
+  openMiniSession,
+  startQuestion,
+  type MiniSessionOptions,
+} from "../src/session";
 import type {
   ActiveDialogController,
   MiniConfig,
@@ -53,7 +57,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function config(): MiniConfig {
+function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
   return {
     model: null,
     variant: null,
@@ -63,6 +67,10 @@ function config(): MiniConfig {
     freshKeybind: "alt+n",
     enableThinking: false,
     toggleThinkingKeybind: "ctrl+t",
+    tools: ["read", "glob", "grep", "webfetch"],
+    continueAction: "queue",
+    cleanupStaleSessions: true,
+    ...overrides,
   };
 }
 
@@ -72,6 +80,8 @@ function fakeCtx() {
     renderer: {
       currentFocusedRenderable: undefined,
       requestRender: vi.fn(),
+      isOsc52Supported: vi.fn(() => true),
+      copyToClipboardOSC52: vi.fn(() => true),
     },
     ui: {
       toast: { show: vi.fn() },
@@ -105,6 +115,23 @@ function fakeCtx() {
       session: { message: { list: vi.fn(() => []) } },
     },
   } as any;
+}
+
+function startOptions(
+  overrides: Partial<MiniSessionOptions> = {},
+): MiniSessionOptions {
+  return {
+    ctx: fakeCtx(),
+    config: config(),
+    mode: "main",
+    sessionID: "session-1",
+    setOverlay: vi.fn(),
+    active: { get: () => undefined, set: vi.fn() },
+    modelPreference: { get: () => undefined, set: vi.fn() },
+    thinkingPreference: { get: () => false, set: vi.fn() },
+    openPickerFn: vi.fn(),
+    ...overrides,
+  };
 }
 
 function captureHandlers(ctx: ReturnType<typeof fakeCtx>) {
@@ -169,6 +196,7 @@ function resolvedAgent() {
     agent: null,
     permission: [],
     permissionSource: "plugin-managed",
+    tools: ["read", "glob", "grep", "webfetch"],
     notices: [],
   };
 }
@@ -223,6 +251,16 @@ async function flushStreamingRender() {
   await flushScrollTimer();
 }
 
+function captureOverlay() {
+  let overlay: OverlayState | undefined;
+  return {
+    get: () => overlay,
+    set: ((next: OverlayState | undefined) => {
+      overlay = next;
+    }) as any,
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   buildCopiedContext.mockClear();
@@ -239,14 +277,9 @@ describe("openMiniSession", () => {
     } as any;
 
     const opened = openMiniSession(
-      fakeCtx(),
-      config(),
-      "main",
-      vi.fn(),
-      { get: () => activeDialog, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({
+        active: { get: () => activeDialog, set: vi.fn() },
+      }),
     );
 
     expect(opened).toBe(false);
@@ -260,19 +293,14 @@ describe("openMiniSession", () => {
     let activeDialog: ActiveDialogController | undefined;
 
     const opened = openMiniSession(
-      fakeCtx(),
-      config(),
-      "main",
-      vi.fn(),
-      {
-        get: () => activeDialog,
-        set: (dialog: ActiveDialogController | undefined) => {
-          activeDialog = dialog;
+      startOptions({
+        active: {
+          get: () => activeDialog,
+          set: (dialog: ActiveDialogController | undefined) => {
+            activeDialog = dialog;
+          },
         },
-      },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      }),
     );
 
     expect(opened).toBe(true);
@@ -291,11 +319,13 @@ describe("startQuestion", () => {
     const handlers = captureHandlers(ctx);
     let overlay: OverlayState | undefined;
     await startQuestion(
-      ctx, config(), "fresh", "session-1",
-      ((next: OverlayState | undefined) => { overlay = next; }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() }, vi.fn(),
+      startOptions({
+        ctx,
+        mode: "fresh",
+        setOverlay: ((next: OverlayState | undefined) => {
+          overlay = next;
+        }) as any,
+      }),
     );
     expect(overlay?.onSubmit("question")).toBe(true);
     expect(overlay?.state.waitingForResponse).toBe(true);
@@ -392,21 +422,16 @@ describe("startQuestion", () => {
       let followUp = false;
 
       await startQuestion(
-        ctx,
-        config(),
-        "main",
-        "session-1",
-        ((next: OverlayState | undefined) => {
-          overlay = next;
-          if (followUp && next && !next.state.loading) {
-            followUp = false;
-            next.onSubmit("second question");
-          }
-        }) as any,
-        { get: () => undefined, set: vi.fn() },
-        { get: () => undefined, set: vi.fn() },
-        { get: () => false, set: vi.fn() },
-        vi.fn(),
+        startOptions({
+          ctx,
+          setOverlay: ((next: OverlayState | undefined) => {
+            overlay = next;
+            if (followUp && next && !next.state.loading) {
+              followUp = false;
+              next.onSubmit("second question");
+            }
+          }) as any,
+        }),
       );
 
       expect(overlay?.onSubmit("first question")).toBe(true);
@@ -462,22 +487,17 @@ describe("startQuestion", () => {
       let renders = 0;
 
       await startQuestion(
-        ctx,
-        config(),
-        "main",
-        "session-1",
-        ((next: OverlayState | undefined) => {
-          overlay = next;
-          renders++;
-          if (followUp && next && !next.state.loading) {
-            followUp = false;
-            next.onSubmit("second question");
-          }
-        }) as any,
-        { get: () => undefined, set: vi.fn() },
-        { get: () => undefined, set: vi.fn() },
-        { get: () => false, set: vi.fn() },
-        vi.fn(),
+        startOptions({
+          ctx,
+          setOverlay: ((next: OverlayState | undefined) => {
+            overlay = next;
+            renders++;
+            if (followUp && next && !next.state.loading) {
+              followUp = false;
+              next.onSubmit("second question");
+            }
+          }) as any,
+        }),
       );
 
       expect(overlay?.onSubmit("first question")).toBe(true);
@@ -527,7 +547,7 @@ describe("startQuestion", () => {
 
     const ctx = fakeCtx();
     const handlers = captureHandlers(ctx);
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
     const scroller = fakeScroller({
       scrollTop: 30,
       scrollHeight: 40,
@@ -535,21 +555,11 @@ describe("startQuestion", () => {
     });
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set }),
     );
 
-    overlay?.onScroller?.(scroller as any);
-    expect(overlay?.onSubmit("hello")).toBe(true);
+    overlay.get()?.onScroller?.(scroller as any);
+    expect(overlay.get()?.onSubmit("hello")).toBe(true);
     await flushScrollTimer();
 
     expect(scroller.scrollTo).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER);
@@ -570,7 +580,7 @@ describe("startQuestion", () => {
 
     const ctx = fakeCtx();
     const handlers = captureHandlers(ctx);
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
     const scroller = fakeScroller({
       scrollTop: 30,
       scrollHeight: 40,
@@ -578,21 +588,11 @@ describe("startQuestion", () => {
     });
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set }),
     );
 
-    overlay?.onScroller?.(scroller as any);
-    expect(overlay?.onSubmit("hello")).toBe(true);
+    overlay.get()?.onScroller?.(scroller as any);
+    expect(overlay.get()?.onSubmit("hello")).toBe(true);
     await flushScrollTimer();
 
     scroller.scrollTop = 25;
@@ -629,15 +629,12 @@ describe("startQuestion", () => {
     };
 
     const opening = startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      vi.fn(),
-      active,
-      modelPreference,
-      thinkingPreference,
-      vi.fn(),
+      startOptions({
+        ctx,
+        active,
+        modelPreference,
+        thinkingPreference,
+      }),
     );
 
     await flushMicrotasks();
@@ -656,15 +653,7 @@ describe("startQuestion", () => {
     resolveRuntimeMiniAgent.mockReturnValue(agentResolution.promise);
 
     const opening = startQuestion(
-      fakeCtx(),
-      config(),
-      "fresh",
-      "session-1",
-      vi.fn(),
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ mode: "fresh" }),
     );
 
     await flushMicrotasks();
@@ -679,23 +668,13 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
 
     await startQuestion(
-      fakeCtx(),
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ setOverlay: overlay.set }),
     );
 
-    expect(overlay?.state.footerCounter).toEqual({
+    expect(overlay.get()?.state.footerCounter).toEqual({
       copiedContext: {
         usedTokens: 31_000,
         totalAvailableTokens: 31_000,
@@ -712,23 +691,13 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
 
     await startQuestion(
-      fakeCtx(),
-      config(),
-      "fresh",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ mode: "fresh", setOverlay: overlay.set }),
     );
 
-    expect(overlay?.state.footerCounter).toEqual({
+    expect(overlay.get()?.state.footerCounter).toEqual({
       copiedContext: undefined,
       miniSession: undefined,
       placeholder: undefined,
@@ -739,24 +708,139 @@ describe("startQuestion", () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
 
     await startQuestion(
-      fakeCtx(),
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
-      () => "New version available: 9.9.9.",
+      startOptions({
+        setOverlay: overlay.set,
+        getUpdateWarning: () => "New version available: 9.9.9.",
+      }),
     );
 
-    expect(overlay?.state.update).toBe("New version available: 9.9.9.");
+    expect(overlay.get()?.state.update).toBe("New version available: 9.9.9.");
+  });
+
+  it("marks the ephemeral session with cleanup metadata", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+
+    await startQuestion(startOptions({ ctx }));
+
+    expect(ctx.client.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { opencodeMiniSession: true } }),
+    );
+  });
+
+  it("submits the initial question passed by the slash command", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+
+    await startQuestion(
+      startOptions({ ctx, initialQuestion: "explain this" }),
+    );
+
+    expect(ctx.client.session.prompt).toHaveBeenCalledWith({
+      sessionID: "mini-session",
+      text: "explain this",
+    });
+  });
+
+  it("retries the last prompt after a failure", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    ctx.client.session.prompt.mockRejectedValueOnce(new Error("boom"));
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({ ctx, setOverlay: overlay.set }),
+    );
+
+    expect(overlay.get()?.onSubmit("hello")).toBe(true);
+    await flushMicrotasks();
+    expect(overlay.get()?.state.error).toContain("boom");
+
+    overlay.get()?.onRetry();
+    await flushMicrotasks();
+
+    expect(ctx.client.session.prompt).toHaveBeenCalledTimes(2);
+    expect(ctx.client.session.prompt).toHaveBeenLastCalledWith({
+      sessionID: "mini-session",
+      text: "hello",
+    });
+    expect(overlay.get()?.state.error).toBeUndefined();
+  });
+
+  it("copies the transcript to the clipboard in clipboard mode", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
+    (getSessionEntries as any).mockReturnValue([
+      assistantEntry({ id: "assistant-1", text: "answer" }),
+    ]);
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        config: config({ continueAction: "clipboard" }),
+        setOverlay: overlay.set,
+      }),
+    );
+
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+    expect(overlay.get()?.continueLabel).toBe("Copy");
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.renderer.copyToClipboardOSC52).toHaveBeenCalledWith(
+      expect.stringContaining("[Context from a mini session]"),
+    );
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Side answer copied to clipboard." }),
+    );
+  });
+
+  it("keeps the dialog open when the clipboard is unsupported", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    ctx.renderer.isOsc52Supported.mockReturnValue(false);
+    const handlers = captureHandlers(ctx);
+    (getSessionEntries as any).mockReturnValue([
+      assistantEntry({ id: "assistant-1", text: "answer" }),
+    ]);
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        config: config({ continueAction: "clipboard" }),
+        setOverlay: overlay.set,
+      }),
+    );
+
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.renderer.copyToClipboardOSC52).not.toHaveBeenCalled();
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "error" }),
+    );
   });
 
   it("stores exact completed input tokens after session idle", async () => {
@@ -773,8 +857,8 @@ describe("startQuestion", () => {
 
     const ctx = fakeCtx();
     const handlers = captureHandlers(ctx);
-    let overlay: OverlayState | undefined;
-    const modelPreference: any = {
+    const overlay = captureOverlay();
+    const modelPreference = {
       get: () => ({
         model: {
           providerID: "anthropic",
@@ -786,24 +870,16 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set, modelPreference }),
     );
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
     await flushMicrotasks();
 
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(11_240);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("11.2K (6%)");
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(11_240);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "11.2K (6%)",
+    );
   });
 
   it("keeps the last completed exact value while a later response streams", async () => {
@@ -820,8 +896,8 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    let overlay: OverlayState | undefined;
-    const modelPreference: any = {
+    const overlay = captureOverlay();
+    const modelPreference = {
       get: () => ({
         model: {
           providerID: "anthropic",
@@ -833,17 +909,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set, modelPreference }),
     );
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
@@ -863,8 +929,10 @@ describe("startQuestion", () => {
     });
     await flushStreamingRender();
 
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(11_240);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("11.2K (6%)");
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(11_240);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "11.2K (6%)",
+    );
   });
 
   it("includes cached input tokens after later completed responses", async () => {
@@ -881,8 +949,8 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    let overlay: OverlayState | undefined;
-    const modelPreference: any = {
+    const overlay = captureOverlay();
+    const modelPreference = {
       get: () => ({
         model: {
           providerID: "anthropic",
@@ -894,23 +962,15 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set, modelPreference }),
     );
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
     await flushMicrotasks();
 
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.2K (3%)");
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "5.2K (3%)",
+    );
 
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
@@ -931,8 +991,10 @@ describe("startQuestion", () => {
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
     await flushMicrotasks();
 
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_334);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "5.3K (3%)",
+    );
   });
 
   it("treats a lower later input value as a one-time incremental delta", async () => {
@@ -949,8 +1011,8 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    let overlay: OverlayState | undefined;
-    const modelPreference: any = {
+    const overlay = captureOverlay();
+    const modelPreference = {
       get: () => ({
         model: {
           providerID: "anthropic",
@@ -962,17 +1024,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set, modelPreference }),
     );
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
@@ -997,8 +1049,10 @@ describe("startQuestion", () => {
     handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
     await flushTimers();
 
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_334);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "5.3K (3%)",
+    );
   });
 
   it.each(["main", "fresh"] as const)(
@@ -1017,8 +1071,8 @@ describe("startQuestion", () => {
           completed: true,
         }),
       ]);
-      let overlay: OverlayState | undefined;
-      const modelPreference: any = {
+      const overlay = captureOverlay();
+      const modelPreference = {
         get: () => ({
           model: {
             providerID: "anthropic",
@@ -1030,22 +1084,12 @@ describe("startQuestion", () => {
       };
 
       await startQuestion(
-        ctx,
-        config(),
-        mode,
-        "session-1",
-        ((next: OverlayState | undefined) => {
-          overlay = next;
-        }) as any,
-        { get: () => undefined, set: vi.fn() },
-        modelPreference,
-        { get: () => false, set: vi.fn() },
-        vi.fn(),
+        startOptions({ ctx, mode, setOverlay: overlay.set, modelPreference }),
       );
 
       handlers["session.idle"]({ data: { sessionID: "mini-session" } });
       await flushMicrotasks();
-      expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_240);
+      expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_240);
 
       (getSessionEntries as any).mockReturnValue([
         assistantEntry({
@@ -1067,8 +1111,10 @@ describe("startQuestion", () => {
       handlers["session.idle"]({ data: { sessionID: "mini-session" } });
       await flushMicrotasks();
 
-      expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
-      expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
+      expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_334);
+      expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+        "5.3K (3%)",
+      );
     },
   );
 
@@ -1088,8 +1134,8 @@ describe("startQuestion", () => {
           completed: true,
         }),
       ]);
-      let overlay: OverlayState | undefined;
-      const modelPreference: any = {
+      const overlay = captureOverlay();
+      const modelPreference = {
         get: () => ({
           model: {
             providerID: "anthropic",
@@ -1101,17 +1147,7 @@ describe("startQuestion", () => {
       };
 
       await startQuestion(
-        ctx,
-        config(),
-        mode,
-        "session-1",
-        ((next: OverlayState | undefined) => {
-          overlay = next;
-        }) as any,
-        { get: () => undefined, set: vi.fn() },
-        modelPreference,
-        { get: () => false, set: vi.fn() },
-        vi.fn(),
+        startOptions({ ctx, mode, setOverlay: overlay.set, modelPreference }),
       );
 
       handlers["session.idle"]({ data: { sessionID: "mini-session" } });
@@ -1137,8 +1173,10 @@ describe("startQuestion", () => {
       handlers["session.idle"]({ data: { sessionID: "mini-session" } });
       await flushMicrotasks();
 
-      expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
-      expect(overlay?.state.footerCounter.miniSession?.text).toBe("5.3K (3%)");
+      expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_334);
+      expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+        "5.3K (3%)",
+      );
     },
   );
 
@@ -1156,8 +1194,8 @@ describe("startQuestion", () => {
         completed: true,
       }),
     ]);
-    let overlay: OverlayState | undefined;
-    const modelPreference: any = {
+    const overlay = captureOverlay();
+    const modelPreference = {
       get: () => ({
         model: {
           providerID: "anthropic",
@@ -1169,17 +1207,7 @@ describe("startQuestion", () => {
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      startOptions({ ctx, setOverlay: overlay.set, modelPreference }),
     );
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
@@ -1201,7 +1229,7 @@ describe("startQuestion", () => {
 
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
     await flushMicrotasks();
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_334);
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_334);
 
     (getSessionEntries as any).mockReturnValue([
       assistantEntry({
@@ -1222,8 +1250,10 @@ describe("startQuestion", () => {
     handlers["session.text.ended"]({ data: { sessionID: "mini-session" } });
     await flushTimers();
 
-    expect(overlay?.state.lastCompletedMiniInputTokens).toBe(5_994);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("6.0K (3%)");
+    expect(overlay.get()?.state.lastCompletedMiniInputTokens).toBe(5_994);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "6.0K (3%)",
+    );
   });
 
   it("recalculates percentages immediately after a model change", async () => {
@@ -1231,41 +1261,38 @@ describe("startQuestion", () => {
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     const ctx = fakeCtx();
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
     const modelPreference: any = {
       get: vi.fn(() => undefined),
       set: vi.fn(),
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      (onAfterSelect) => {
-        if (!overlay) return;
-        overlay.state.lastCompletedMiniInputTokens = 100_000;
-        modelPreference.get.mockReturnValue({
-          model: {
-            providerID: "anthropic",
-            modelID: "claude-sonnet-4.6",
-          },
-          variant: "fast",
-        });
-        onAfterSelect();
-      },
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        modelPreference,
+        openPickerFn: (onAfterSelect) => {
+          if (!overlay.get()) return;
+          overlay.get()!.state.lastCompletedMiniInputTokens = 100_000;
+          modelPreference.get.mockReturnValue({
+            model: {
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4.6",
+            },
+            variant: "fast",
+          });
+          onAfterSelect();
+        },
+      }),
     );
 
-    overlay?.onChangeModel();
+    overlay.get()?.onChangeModel();
 
-    expect(overlay?.state.modelContextWindow).toBe(200_000);
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("100.0K (50%)");
+    expect(overlay.get()?.state.modelContextWindow).toBe(200_000);
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe(
+      "100.0K (50%)",
+    );
   });
 
   it("changes the placeholder only after the exact mini-session value crosses the limit threshold", async () => {
@@ -1273,42 +1300,37 @@ describe("startQuestion", () => {
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     const ctx = fakeCtx();
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
     const modelPreference: any = {
       get: vi.fn(() => undefined),
       set: vi.fn(),
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      (onAfterSelect) => {
-        if (!overlay) return;
-        overlay.state.lastCompletedMiniInputTokens = 196_000;
-        modelPreference.get.mockReturnValue({
-          model: {
-            providerID: "anthropic",
-            modelID: "claude-sonnet-4.6",
-          },
-          variant: "fast",
-        });
-        onAfterSelect();
-      },
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        modelPreference,
+        openPickerFn: (onAfterSelect) => {
+          if (!overlay.get()) return;
+          overlay.get()!.state.lastCompletedMiniInputTokens = 196_000;
+          modelPreference.get.mockReturnValue({
+            model: {
+              providerID: "anthropic",
+              modelID: "claude-sonnet-4.6",
+            },
+            variant: "fast",
+          });
+          onAfterSelect();
+        },
+      }),
     );
 
-    expect(overlay?.state.inputPlaceholder).toBeUndefined();
+    expect(overlay.get()?.state.inputPlaceholder).toBeUndefined();
 
-    overlay?.onChangeModel();
+    overlay.get()?.onChangeModel();
 
-    expect(overlay?.state.inputPlaceholder).toBe(
+    expect(overlay.get()?.state.inputPlaceholder).toBe(
       "Session context limit reached...",
     );
   });
@@ -1318,42 +1340,37 @@ describe("startQuestion", () => {
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
     const ctx = fakeCtx();
-    let overlay: OverlayState | undefined;
+    const overlay = captureOverlay();
     const modelPreference: any = {
       get: vi.fn(() => undefined),
       set: vi.fn(),
     };
 
     await startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      ((next: OverlayState | undefined) => {
-        overlay = next;
-      }) as any,
-      { get: () => undefined, set: vi.fn() },
-      modelPreference,
-      { get: () => false, set: vi.fn() },
-      (onAfterSelect) => {
-        if (!overlay) return;
-        overlay.state.lastCompletedMiniInputTokens = 196_000;
-        modelPreference.get.mockReturnValue({
-          model: {
-            providerID: "openai",
-            modelID: "gpt-5",
-          },
-        });
-        onAfterSelect();
-      },
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        modelPreference,
+        openPickerFn: (onAfterSelect) => {
+          if (!overlay.get()) return;
+          overlay.get()!.state.lastCompletedMiniInputTokens = 196_000;
+          modelPreference.get.mockReturnValue({
+            model: {
+              providerID: "openai",
+              modelID: "gpt-5",
+            },
+          });
+          onAfterSelect();
+        },
+      }),
     );
 
-    overlay?.onChangeModel();
+    overlay.get()?.onChangeModel();
 
-    expect(overlay?.state.modelContextWindow).toBeUndefined();
-    expect(overlay?.state.footerCounter.miniSession?.text).toBe("196.0K");
-    expect(overlay?.state.footerCounter.miniSession?.warning).toBe(false);
-    expect(overlay?.state.inputPlaceholder).toBeUndefined();
+    expect(overlay.get()?.state.modelContextWindow).toBeUndefined();
+    expect(overlay.get()?.state.footerCounter.miniSession?.text).toBe("196.0K");
+    expect(overlay.get()?.state.footerCounter.miniSession?.warning).toBe(false);
+    expect(overlay.get()?.state.inputPlaceholder).toBeUndefined();
   });
 
   it("uses the fresh keybind in the hide toast", async () => {
@@ -1365,20 +1382,16 @@ describe("startQuestion", () => {
     let activeDialog: ActiveDialogController | undefined;
 
     const opening = startQuestion(
-      ctx,
-      config(),
-      "fresh",
-      "session-1",
-      vi.fn(),
-      {
-        get: () => activeDialog,
-        set: (dialog: ActiveDialogController | undefined) => {
-          activeDialog = dialog;
+      startOptions({
+        ctx,
+        mode: "fresh",
+        active: {
+          get: () => activeDialog,
+          set: (dialog: ActiveDialogController | undefined) => {
+            activeDialog = dialog;
+          },
         },
-      },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      }),
     );
 
     await flushMicrotasks();
@@ -1403,20 +1416,15 @@ describe("startQuestion", () => {
     resolveRuntimeMiniAgent.mockRejectedValue(new Error("agent lookup failed"));
 
     const opening = startQuestion(
-      ctx,
-      config(),
-      "main",
-      "session-1",
-      vi.fn(),
-      {
-        get: () => activeDialog,
-        set: (dialog: ActiveDialogController | undefined) => {
-          activeDialog = dialog;
+      startOptions({
+        ctx,
+        active: {
+          get: () => activeDialog,
+          set: (dialog: ActiveDialogController | undefined) => {
+            activeDialog = dialog;
+          },
         },
-      },
-      { get: () => undefined, set: vi.fn() },
-      { get: () => false, set: vi.fn() },
-      vi.fn(),
+      }),
     );
 
     await opening;
