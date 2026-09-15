@@ -39,8 +39,18 @@ export type MiniKeybindActions = {
   scrollTo: (position: number) => void;
 };
 
-function parseSlashQuestion(input: string | undefined) {
-  const question = input?.trim();
+export function parseSlashQuestion(
+  input: string | undefined,
+  commandName: string,
+) {
+  const raw = input?.trim();
+  if (!raw) return undefined;
+
+  // Depending on how the host dispatches the slash command, the raw input may
+  // still contain the command itself ("/mini question"); strip it defensively.
+  const question = raw
+    .replace(new RegExp(`^/${commandName}(?:\\s+|$)`, "i"), "")
+    .trim();
   return question ? question : undefined;
 }
 
@@ -86,7 +96,7 @@ export function buildGlobalCommands(
       slash: { name: "mini", arguments: true },
       enabled: onSession,
       run: (input) =>
-        triggerMiniMode("main", "command", parseSlashQuestion(input)),
+        triggerMiniMode("main", "command", parseSlashQuestion(input, "mini")),
     },
     {
       id: CMD_OPEN_FRESH,
@@ -98,7 +108,11 @@ export function buildGlobalCommands(
       slash: { name: "mini-fresh", arguments: true },
       enabled: onSession,
       run: (input) =>
-        triggerMiniMode("fresh", "command", parseSlashQuestion(input)),
+        triggerMiniMode(
+          "fresh",
+          "command",
+          parseSlashQuestion(input, "mini-fresh"),
+        ),
     },
     {
       id: CMD_CHANGE_MODEL,
