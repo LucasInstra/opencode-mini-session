@@ -124,6 +124,18 @@ describe("config parsing", () => {
     expect(parseConfig({ tools: "read" }).tools).toEqual(DEFAULT_ALLOWED_TOOLS);
   });
 
+  it("parses model and tokenLimit values", () => {
+    expect(parseConfig({}).model).toBeNull();
+    expect(parseConfig({ model: " anthropic/claude " }).model).toBe(
+      "anthropic/claude",
+    );
+    expect(parseConfig({ model: 123 }).model).toBeNull();
+    expect(parseConfig({}).tokenLimit).toBe(50_000);
+    expect(parseConfig({ tokenLimit: 1234.9 }).tokenLimit).toBe(1234);
+    expect(parseConfig({ tokenLimit: -5 }).tokenLimit).toBe(50_000);
+    expect(parseConfig({ tokenLimit: "100" }).tokenLimit).toBe(50_000);
+  });
+
   it("parses continueAction and cleanupStaleSessions", () => {
     expect(parseConfig({}).continueAction).toBe("queue");
     expect(parseConfig({ continueAction: "clipboard" }).continueAction).toBe(

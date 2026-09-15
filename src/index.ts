@@ -81,7 +81,6 @@ export default Plugin.define({
 
     const actions: MiniKeybindActions = {
       config,
-      isOverlayOpen: () => Boolean(overlay()),
       onSession: () => getCurrentRoute(ctx).kind === "session",
       triggerMiniMode: (mode, source, initialQuestion, handoff) => {
         void triggerMiniMode(mode, source, initialQuestion, handoff);

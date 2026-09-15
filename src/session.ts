@@ -19,7 +19,6 @@ import {
   resolveDefaultModel,
   formatResolvedModel,
   resolveModelContextWindow,
-  type ModelSource,
 } from "./model";
 import { getCurrentRoute, type TuiContext } from "./opencode";
 import type {
@@ -48,6 +47,22 @@ type ErrorPath =
   | "session.create throw";
 
 const SYSTEM_INSTRUCTION_KEY = "mini.system";
+
+/**
+ * The server rejects instruction entries larger than 256 KiB. Clamp ours below
+ * that so a large copied context degrades into a truncated entry instead of a
+ * failed `put` (which would drop the whole mini instruction).
+ */
+export const MAX_INSTRUCTION_BYTES = 250_000;
+
+export function clampInstructionValue(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.length <= MAX_INSTRUCTION_BYTES) return value;
+  const truncated = new TextDecoder().decode(
+    bytes.slice(0, MAX_INSTRUCTION_BYTES),
+  );
+  return `${truncated}\n\n[Session context truncated to fit the instruction limit.]`;
+}
 
 export type MiniSessionOptions = {
   ctx: TuiContext;
@@ -684,7 +699,7 @@ export async function startQuestion(options: MiniSessionOptions) {
         await ctx.client.session.instructions.entry.put({
           sessionID: ephemeralSessionID,
           key: SYSTEM_INSTRUCTION_KEY,
-          value: system,
+          value: clampInstructionValue(system),
         });
       } catch (cause) {
         if (closed) return;

@@ -16,17 +16,21 @@ export function selectStaleMiniSessions(
   now = Date.now(),
   maxAgeMs = STALE_MINI_SESSION_MAX_AGE_MS,
 ) {
-  return sessions.filter(
-    (session) =>
-      isMiniSession(session) && now - session.time.created > maxAgeMs,
-  );
+  return sessions.filter((session) => {
+    if (!isMiniSession(session)) return false;
+    const lastActivity = Math.max(
+      session.time.created,
+      session.time.updated ?? 0,
+    );
+    return now - lastActivity > maxAgeMs;
+  });
 }
 
 /**
- * Removes ephemeral mini sessions that were left behind by a crashed or
- * force-closed client. Only sessions created by this plugin (metadata marker)
- * and older than `STALE_MINI_SESSION_MAX_AGE_MS` are removed, so live mini
- * sessions in other TUI instances are never touched.
+ * Removes ephemeral mini sessions left behind by a crashed or force-closed
+ * client. Only sessions created by this plugin (metadata marker) and untouched
+ * for `STALE_MINI_SESSION_MAX_AGE_MS` are removed, so a mini session that is
+ * still being used — even in another TUI instance — is never touched.
  */
 export async function cleanupStaleMiniSessions(
   ctx: Pick<TuiContext, "client">,

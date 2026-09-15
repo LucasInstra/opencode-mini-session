@@ -29,6 +29,7 @@ vi.mock("../src/context", () => ({
 import {
   openMiniSession,
   startQuestion,
+  clampInstructionValue,
   type MiniSessionOptions,
 } from "../src/session";
 import type {
@@ -674,6 +675,16 @@ describe("startQuestion", () => {
       }),
     );
     expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("clamps oversized instruction values", () => {
+    const clamped = clampInstructionValue("x".repeat(300_000));
+
+    expect(clamped).toContain(
+      "[Session context truncated to fit the instruction limit.]",
+    );
+    expect(new TextEncoder().encode(clamped).length).toBeLessThan(300_000);
+    expect(clampInstructionValue("small")).toBe("small");
   });
 
   it("aborts before creating a session when the plugin is disposed", async () => {
