@@ -27,7 +27,6 @@ function actions(
 ): MiniKeybindActions {
   return {
     config: config(),
-    isOverlayOpen: () => false,
     onSession: () => true,
     triggerMiniMode,
     openModelPicker: vi.fn(),
