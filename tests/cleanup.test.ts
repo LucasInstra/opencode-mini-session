@@ -16,13 +16,15 @@ function session(
   overrides: {
     metadata?: Record<string, unknown>;
     created?: number;
+    updated?: number;
   } = {},
 ) {
+  const created = overrides.created ?? 0;
   return {
     id,
     metadata:
       overrides.metadata ?? ({ [MINI_SESSION_METADATA_KEY]: true } as const),
-    time: { created: overrides.created ?? 0, updated: overrides.created ?? 0 },
+    time: { created, updated: overrides.updated ?? created },
   } as unknown as MiniSessionLike & Pick<SessionInfo, "metadata">;
 }
 
@@ -60,6 +62,22 @@ describe("selectStaleMiniSessions", () => {
     expect(selectStaleMiniSessions([fresh, stale, unmarked], now).map((s) => s.id)).toEqual([
       "stale",
     ]);
+  });
+
+  it("keeps old sessions that were used recently", () => {
+    const now = 1_000_000_000;
+    const oldButActive = session("active", {
+      created: 0,
+      updated: now - 1_000,
+    });
+    const stale = session("stale", {
+      created: now - STALE_MINI_SESSION_MAX_AGE_MS - 1,
+      updated: now - STALE_MINI_SESSION_MAX_AGE_MS - 1,
+    });
+
+    expect(
+      selectStaleMiniSessions([oldButActive, stale], now).map((s) => s.id),
+    ).toEqual(["stale"]);
   });
 });
 

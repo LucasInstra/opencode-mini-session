@@ -24,7 +24,6 @@ import type { MiniConfig, MiniMode } from "./types";
 
 export type MiniKeybindActions = {
   config: MiniConfig;
-  isOverlayOpen: () => boolean;
   onSession: () => boolean;
   triggerMiniMode: (
     mode: MiniMode,
