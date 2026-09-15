@@ -11,14 +11,16 @@ https://github.com/user-attachments/assets/7a668d45-dffc-4311-91fb-1460bf773238
 
 The mini session runs as an overlay alongside the main session without blocking it, so you can ask side questions while the main thread continues working.
 
-Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with no copied conversation context. You can also run `/mini` or `/mini-fresh` from the command palette during any OpenCode session. Type a question in the mini session dialog and send it. The plugin:
+Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with no copied conversation context. You can also run `/mini` or `/mini-fresh` from the command palette during any OpenCode session; `/mini <question>` opens the overlay and asks immediately. Type a question in the mini session dialog and send it. The plugin:
 
 1. Gathers context from the current session (token-limited)
 2. Creates a temporary isolated session with that context
 3. Sends your question to the AI and streams the response
 4. Lets you ask follow-up questions in the same mini session
-5. Optionally injects the full mini-session transcript back into the main thread
+5. Optionally continues the conversation in the main thread
 6. Deletes the ephemeral session on close
+
+Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client crashes or is force-closed before cleanup runs, the next start removes leftover mini sessions older than 12 hours.
 
 ## Installation
 
@@ -52,8 +54,8 @@ Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
 |---|---|
 | `alt+b` (configurable) | Toggle main mini session overlay |
 | `alt+n` (configurable) | Toggle fresh mini session overlay |
-| `/mini` | Open mini session with copied session context |
-| `/mini-fresh` | Open mini session with no copied session context |
+| `/mini [question]` | Open mini session with copied session context, optionally asking immediately |
+| `/mini-fresh [question]` | Open mini session with no copied session context, optionally asking immediately |
 | `/mini-model` | Change model for future mini sessions |
 
 ### Inside the mini session
@@ -61,11 +63,13 @@ Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
 | Key | Action |
 |---|---|
 | `enter` | Send question / follow-up |
-| `shift+enter` | Continue in the main thread (queues the mini transcript into the session) |
+| `shift+enter` | Continue in the main thread (queues the transcript, or copies it with `continueAction: "clipboard"`) |
 | `alt+b` or `alt+n` (configurable) | Hide overlay, resumable |
 | `ctrl+t` (configurable) | Toggle thinking blocks |
 | `tab` | Change the model for the next question |
 | `esc` / `ctrl+c` | Cancel and close |
+
+When a response fails, a **Retry** button re-sends the last question.
 
 ## Configuration
 
@@ -81,6 +85,11 @@ All options are optional. Defaults are shown below.
 | `freshKeybind` | `string \| false` | `"alt+n"` | Fresh mini-session keybind. Set to `false` or `"none"` to disable. |
 | `enableThinking` | `boolean` | `false` | Show thinking blocks collapsed by default. |
 | `toggleThinkingKeybind` | `string \| false` | `"ctrl+t"` | Thinking toggle keybind inside the mini session. Set to `false` or `"none"` to disable. |
+| `tools` | `string[]` | `["read","glob","grep","webfetch"]` | Read-only permission actions available to the plugin-managed mini agent. Supported: `read`, `glob`, `grep`, `webfetch`, `websearch`. Unknown or write-capable actions are ignored. |
+| `continueAction` | `"queue" \| "clipboard"` | `"queue"` | What `shift+enter` does: queue the transcript into the main session, or copy it to the clipboard (OSC 52, works in most modern terminals). |
+| `cleanupStaleSessions` | `boolean` | `true` | On startup, remove mini sessions left behind by a crashed client (marked sessions older than 12 hours). |
+
+The model chosen with `/mini-model` and the thinking toggle are remembered between restarts (per plugin storage).
 
 If you want to customize the plugin, your config should look something like this:
 
@@ -97,6 +106,9 @@ If you want to customize the plugin, your config should look something like this
         "freshKeybind": "alt+f",
         "enableThinking": true,
         "toggleThinkingKeybind": "alt+a",
+        "tools": ["read", "glob", "grep", "webfetch", "websearch"],
+        "continueAction": "clipboard",
+        "cleanupStaleSessions": true,
         "agent": "build"
       }
     }
@@ -106,7 +118,7 @@ If you want to customize the plugin, your config should look something like this
 
 ## Agents and permissions
 
-If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only permissions: `read`, `glob`, `grep`, and `webfetch`.
+If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only permissions: `read`, `glob`, and `grep` plus the web tools configured in `tools` (default `webfetch`). Everything else stays denied, and the mini system prompt tells the model to prefer `read` for files it can name.
 
 To customize permissions, tone, instructions, or other behavior, set `agent` to an existing OpenCode agent name. The plugin will use that agent's settings directly.
 
