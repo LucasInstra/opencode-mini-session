@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "release": "node scripts/release.mjs",
     "test": "vitest run",
