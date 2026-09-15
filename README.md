@@ -24,7 +24,7 @@ Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client
 
 ## Installation
 
-> Requires OpenCode V2 (`opencode >= 2`).
+> Requires OpenCode V2 (`opencode >= 2`) and the 2.x plugin release. The 1.x releases target OpenCode 1 and fail to load on V2 with `Invalid V2 TUI plugin module`.
 
 ### Automatic
 
@@ -45,6 +45,20 @@ Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
   ]
 }
 ```
+
+### Local checkout
+
+To run an unpublished checkout, build it and load it through the global plugin directory (`~/.config/opencode/plugins`):
+
+```sh
+npm install && npm run build
+mkdir -p ~/.config/opencode/plugins/mini-session
+ln -s "$PWD/dist" ~/.config/opencode/plugins/mini-session/dist
+ln -s "$PWD/node_modules" ~/.config/opencode/plugins/mini-session/node_modules
+printf 'export { default } from "./dist/index.js";\n' > ~/.config/opencode/plugins/mini-session/tui.ts
+```
+
+On Windows, create the two links with `mklink /J` and write `tui.ts` with the same one-line re-export. Restart OpenCode after rebuilding.
 
 ## Keybinds
 
