@@ -26,11 +26,28 @@ export const DEFAULT_FRESH_KEYBIND = "alt+n";
 export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
 export const THINKING_TEXT = "Thinking...";
 
-export const SAFE_TOOLS = {
-  read: true,
-  glob: true,
-  grep: true,
-  webfetch: true,
-};
+/**
+ * Permission actions the mini agent may be granted. The list is deliberately
+ * read-only: everything else is denied for plugin-managed mini sessions.
+ * `list` is not a V2 permission action; the `read` tool lists directories.
+ */
+export const MINI_TOOL_ACTIONS = [
+  "read",
+  "glob",
+  "grep",
+  "webfetch",
+  "websearch",
+] as const;
 
-export const DEFAULT_ALLOWED_TOOLS = Object.keys(SAFE_TOOLS);
+export const DEFAULT_ALLOWED_TOOLS: string[] = [
+  "read",
+  "glob",
+  "grep",
+  "webfetch",
+];
+
+/** Session metadata marker used to identify (and clean up) ephemeral mini sessions. */
+export const MINI_SESSION_METADATA_KEY = "opencodeMiniSession";
+
+/** Mini sessions older than this are treated as leaked by a crashed client. */
+export const STALE_MINI_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;

@@ -13,6 +13,7 @@ import {
   type ResolvedMiniAgent,
 } from "./agent";
 import { buildCopiedContext, getSessionEntries } from "./context";
+import { MINI_SESSION_METADATA_KEY } from "./constants";
 import { getErrorMessage } from "./diagnostics";
 import {
   resolveDefaultModel,
@@ -26,6 +27,7 @@ import type {
   AnswerDialogState,
   MiniConfig,
   MiniMode,
+  ModelPreference,
   ModelPreferenceState,
   OverlayState,
   ResolvedModel,
@@ -47,17 +49,22 @@ type ErrorPath =
 
 const SYSTEM_INSTRUCTION_KEY = "mini.system";
 
-export function openMiniSession(
-  ctx: TuiContext,
-  config: MiniConfig,
-  mode: MiniMode,
-  setOverlay: Setter<OverlayState | undefined>,
-  active: ActiveDialog,
-  modelPreference: ModelPreferenceState,
-  thinkingPreference: ThinkingPreferenceState,
-  openPickerFn: (onAfterSelect: () => void) => void,
-  getUpdateWarning?: () => string | undefined,
-): boolean {
+export type MiniSessionOptions = {
+  ctx: TuiContext;
+  config: MiniConfig;
+  mode: MiniMode;
+  sessionID: string;
+  setOverlay: Setter<OverlayState | undefined>;
+  active: ActiveDialog;
+  modelPreference: ModelPreferenceState;
+  thinkingPreference: ThinkingPreferenceState;
+  openPickerFn: (onAfterSelect: () => void) => void;
+  getUpdateWarning?: () => string | undefined;
+  initialQuestion?: string;
+};
+
+export function openMiniSession(options: MiniSessionOptions): boolean {
+  const { ctx, active } = options;
   const route = getCurrentRoute(ctx);
 
   if (route.kind !== "session") {
@@ -74,8 +81,12 @@ export function openMiniSession(
     return false;
   }
 
-  const sessionID = route.sessionID;
-  void startQuestion(
+  void startQuestion({ ...options, sessionID: route.sessionID });
+  return true;
+}
+
+export async function startQuestion(options: MiniSessionOptions) {
+  const {
     ctx,
     config,
     mode,
@@ -86,22 +97,8 @@ export function openMiniSession(
     thinkingPreference,
     openPickerFn,
     getUpdateWarning,
-  );
-  return true;
-}
-
-export async function startQuestion(
-  ctx: TuiContext,
-  config: MiniConfig,
-  mode: MiniMode,
-  sessionID: string,
-  setOverlay: Setter<OverlayState | undefined>,
-  active: ActiveDialog,
-  modelPreference: ModelPreferenceState,
-  thinkingPreference: ThinkingPreferenceState,
-  openPickerFn: (onAfterSelect: () => void) => void,
-  getUpdateWarning?: () => string | undefined,
-) {
+    initialQuestion,
+  } = options;
   const [messages, models, providers, defaultModelResult] = await Promise.all([
     fetchSessionMessages(ctx, sessionID),
     fetchModels(ctx),
@@ -127,9 +124,12 @@ export async function startQuestion(
   const hideKey = mode === "fresh" ? config.freshKeybind : config.keybind;
   const hiddenCommand = mode === "fresh" ? "/mini-fresh" : "/mini";
   const title = mode === "fresh" ? "mini fresh" : "mini session";
+  const continueLabel =
+    config.continueAction === "clipboard" ? "Copy" : "Continue";
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
+  let lastPrompt: string | undefined;
 
   const dialogState: AnswerDialogState = {
     mode,
@@ -362,9 +362,28 @@ export async function startQuestion(
     continuing = true;
 
     try {
+      const text = buildContinuePrompt(transcript);
+
+      if (config.continueAction === "clipboard") {
+        if (!copyTextToClipboard(ctx, text)) {
+          ctx.ui.toast.show({
+            variant: "error",
+            message:
+              "Clipboard is not supported by this terminal. Use continueAction \"queue\" or copy from the transcript.",
+          });
+          return;
+        }
+        ctx.ui.toast.show({
+          variant: "success",
+          message: "Side answer copied to clipboard.",
+        });
+        await cleanup();
+        return;
+      }
+
       await ctx.client.session.prompt({
         sessionID,
-        text: buildContinuePrompt(transcript),
+        text,
         delivery: "queue",
       });
       ctx.ui.toast.show({
@@ -380,6 +399,21 @@ export async function startQuestion(
     } finally {
       continuing = false;
     }
+  };
+
+  const retryLastPrompt = () => {
+    if (closed || dialogState.loading) return;
+    if (!lastPrompt) return;
+    if (!tempSessionID) {
+      ctx.ui.toast.show({
+        variant: "warning",
+        message: "mini session is still opening.",
+      });
+      return;
+    }
+    dialogState.error = undefined;
+    dialogState.errorDetail = undefined;
+    submitPrompt(lastPrompt);
   };
 
   const toggleThinking = () => {
@@ -431,6 +465,7 @@ export async function startQuestion(
       modelName: getModelName(),
       hideKey,
       toggleThinkingKeybind: config.toggleThinkingKeybind,
+      continueLabel,
       state: dialogState,
       onScroller: (scroller) => {
         overlayScroller = scroller;
@@ -441,6 +476,7 @@ export async function startQuestion(
       onHide: () => hide(),
       onClose: () => void closeFromUser(),
       onContinue: () => void continueInMainThread(),
+      onRetry: retryLastPrompt,
       onChangeModel: () =>
         openPickerFn(() => renderOverlay({ focusInput: true })),
       onToggleThinking: toggleThinking,
@@ -540,6 +576,7 @@ export async function startQuestion(
       return false;
     }
     const promptSessionID = tempSessionID;
+    lastPrompt = prompt;
 
     dialogState.error = undefined;
     dialogState.errorDetail = undefined;
@@ -587,6 +624,7 @@ export async function startQuestion(
     const created = await ctx.client.session.create(
       buildMiniSessionCreatePayload(resolvedAgent, {
         title: "mini session",
+        metadata: { [MINI_SESSION_METADATA_KEY]: true },
         ...(ctx.location?.directory
           ? { location: { directory: ctx.location.directory } }
           : {}),
@@ -761,6 +799,10 @@ export async function startQuestion(
         }),
       );
     }
+
+    if (initialQuestion) {
+      submitPrompt(initialQuestion);
+    }
   } catch (cause) {
     if (closed) return;
     setPromptError("session.create throw", cause);
@@ -799,11 +841,13 @@ export function openModelPicker(
         defaultModel,
         defaultModelResult,
       );
+      const current = findCurrentModelValue(options, modelPreference.get());
 
       const selected = await ctx.ui.dialog.select<ModelSelectValue>({
         title: "Mini session model",
         placeholder: "Select model for future mini-session questions",
         options,
+        ...(current ? { current } : {}),
       });
 
       if (selected === undefined) return;
@@ -836,6 +880,24 @@ export function openModelPicker(
       onOpenChange?.(false);
     }
   })();
+}
+
+function findCurrentModelValue(
+  options: { value: ModelSelectValue }[],
+  preference: ModelPreference,
+): ModelSelectValue | undefined {
+  const model = preference?.model;
+  if (!model) {
+    return options.find((option) => option.value.type === "default")?.value;
+  }
+
+  return options.find(
+    (option) =>
+      option.value.type === "model" &&
+      option.value.model.providerID === model.providerID &&
+      option.value.model.modelID === model.modelID &&
+      (option.value.variant ?? undefined) === (preference?.variant ?? undefined),
+  )?.value;
 }
 
 function buildModelOptions(
@@ -970,6 +1032,18 @@ function getAssistantInputTokens(tokens: {
 function formatSessionModelKey(resolved: ResolvedModel) {
   if (!resolved.model) return "";
   return `${resolved.model.providerID}/${resolved.model.modelID}${resolved.variant ? `#${resolved.variant}` : ""}`;
+}
+
+function copyTextToClipboard(ctx: TuiContext, text: string): boolean {
+  const renderer = ctx.renderer as {
+    isOsc52Supported?: () => boolean;
+    copyToClipboardOSC52?: (value: string) => boolean;
+  };
+  if (typeof renderer.isOsc52Supported === "function" && !renderer.isOsc52Supported()) {
+    return false;
+  }
+  if (typeof renderer.copyToClipboardOSC52 !== "function") return false;
+  return renderer.copyToClipboardOSC52(text);
 }
 
 async function fetchSessionMessages(
