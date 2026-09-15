@@ -5,20 +5,42 @@ import path from "node:path";
 
 const tempDir = await mkdtemp(path.join(tmpdir(), "opencode-mini-session-"));
 const installDir = path.join(tempDir, "install");
+const useShell = process.platform === "win32";
+const npm = useShell ? "npm.cmd" : "npm";
+const spawnOptions = useShell ? { shell: true } : {};
+const quoteForShell = (value) =>
+  useShell && /\s/.test(value) ? `"${value}"` : value;
 
 try {
   const packed = JSON.parse(
-    execFileSync("npm", ["pack", "--json", "--pack-destination", tempDir], {
-      encoding: "utf8",
-    }),
+    execFileSync(
+      npm,
+      ["pack", "--json", "--pack-destination", quoteForShell(tempDir)],
+      {
+        encoding: "utf8",
+        ...spawnOptions,
+      },
+    ),
   );
-  const tarball = path.join(tempDir, packed[0].filename);
+  // npm <11 returns an array, npm >=11 returns an object keyed by package name.
+  const packedEntry = Array.isArray(packed) ? packed[0] : Object.values(packed)[0];
+  if (!packedEntry?.filename) {
+    throw new Error("npm pack did not report a tarball filename");
+  }
+  const tarball = path.join(tempDir, packedEntry.filename);
 
   await mkdir(installDir);
   execFileSync(
-    "npm",
-    ["install", "--ignore-scripts", "--no-package-lock", "--prefix", installDir, tarball],
-    { stdio: "inherit" },
+    npm,
+    [
+      "install",
+      "--ignore-scripts",
+      "--no-package-lock",
+      "--prefix",
+      quoteForShell(installDir),
+      quoteForShell(tarball),
+    ],
+    { stdio: "inherit", ...spawnOptions },
   );
   const entryPath = path.join(
     installDir,
@@ -39,7 +61,7 @@ try {
     "bun",
     [
       "--eval",
-      'import plugin from "opencode-mini-session/tui"; if (plugin.id !== "opencode-mini-session" || typeof plugin.tui !== "function") throw new Error("Invalid packaged TUI module");',
+      'import plugin from "opencode-mini-session/tui"; if (plugin.id !== "opencode-mini-session" || typeof plugin.setup !== "function") throw new Error("Invalid packaged TUI module");',
     ],
     { cwd: installDir, stdio: "inherit" },
   );
