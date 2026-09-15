@@ -11,6 +11,14 @@ const spawnOptions = useShell ? { shell: true } : {};
 const quoteForShell = (value) =>
   useShell && /\s/.test(value) ? `"${value}"` : value;
 
+// A parent `npm run` exports the user's npm configuration into the child
+// environment. npm 12 rejects some of those values (for example
+// `allow-scripts` from ~/.npmrc) on the isolated --prefix install this script
+// performs, so strip the known-problematic keys.
+const childEnv = { ...process.env };
+delete childEnv.npm_config_allow_scripts;
+delete childEnv.NPM_CONFIG_ALLOW_SCRIPTS;
+
 try {
   const packed = JSON.parse(
     execFileSync(
@@ -18,6 +26,7 @@ try {
       ["pack", "--json", "--pack-destination", quoteForShell(tempDir)],
       {
         encoding: "utf8",
+        env: childEnv,
         ...spawnOptions,
       },
     ),
@@ -40,7 +49,7 @@ try {
       quoteForShell(installDir),
       quoteForShell(tarball),
     ],
-    { stdio: "inherit", ...spawnOptions },
+    { stdio: "inherit", env: childEnv, ...spawnOptions },
   );
   const entryPath = path.join(
     installDir,
