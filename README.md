@@ -7,20 +7,15 @@ An OpenCode TUI plugin that opens interactive temporary mini sessions for side q
 
 https://github.com/user-attachments/assets/7a668d45-dffc-4311-91fb-1460bf773238
 
-## What it does
+## Highlights
 
-The mini session runs as an overlay alongside the main session without blocking it, so you can ask side questions while the main thread continues working.
-
-Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with no copied conversation context. You can also run `/mini` or `/mini-fresh` from the command palette during any OpenCode session; `/mini <question>` opens the overlay and asks immediately. Type a question in the mini session dialog and send it. The plugin:
-
-1. Gathers context from the current session (token-limited)
-2. Creates a temporary isolated session with that context
-3. Sends your question to the AI and streams the response
-4. Lets you ask follow-up questions in the same mini session
-5. Optionally continues the conversation in the main thread
-6. Deletes the ephemeral session on close
-
-Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client crashes or is force-closed before cleanup runs, the next start removes leftover mini sessions older than 12 hours.
+- **Side questions without blocking the main thread** — `alt+b` or `/mini [question]`
+- **Fresh threads with no copied context** — `alt+n` or `/mini-fresh [question]`
+- **Session handoff** — `/mini-handoff [instructions]` writes a document for a new session and copies it to the clipboard
+- **Streaming answers** with thinking blocks, a model picker, and context/token counters
+- **Read-only by default** — the plugin-managed mini agent only gets `read`, `glob`, `grep` and `webfetch` (add `websearch` with the `tools` option)
+- **Continue your way** — queue the answer into the main session, or copy it to the clipboard (OSC 52)
+- **Retry** on failure, persisted model/thinking preferences, and automatic cleanup of leaked sessions
 
 ## Installation
 
@@ -59,6 +54,21 @@ printf 'export { default } from "./dist/index.js";\n' > ~/.config/opencode/plugi
 ```
 
 On Windows, create the two links with `mklink /J` and write `tui.ts` with the same one-line re-export. Restart OpenCode after rebuilding.
+
+## What it does
+
+The mini session runs as an overlay alongside the main session without blocking it, so you can ask side questions while the main thread continues working.
+
+Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with no copied conversation context. You can also run `/mini` or `/mini-fresh` from the command palette during any OpenCode session; `/mini <question>` opens the overlay and asks immediately. Type a question in the mini session dialog and send it. The plugin:
+
+1. Gathers context from the current session (token-limited)
+2. Creates a temporary isolated session with that context
+3. Sends your question to the AI and streams the response
+4. Lets you ask follow-up questions in the same mini session
+5. Optionally continues the conversation in the main thread
+6. Deletes the ephemeral session on close
+
+Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client crashes or is force-closed before cleanup runs, the next start removes leftover mini sessions older than 12 hours.
 
 ## Keybinds
 
