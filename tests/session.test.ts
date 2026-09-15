@@ -602,6 +602,92 @@ describe("startQuestion", () => {
     );
   });
 
+  it("copies the handoff document even after a failed follow-up", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
+    (getSessionEntries as any).mockReturnValue([
+      assistantEntry({ id: "assistant-1", text: "HANDOFF DOC" }),
+    ]);
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "write handoff",
+      }),
+    );
+
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+
+    ctx.client.session.prompt.mockRejectedValueOnce(new Error("boom"));
+    expect(overlay.get()?.onSubmit("make it shorter")).toBe(true);
+    await flushMicrotasks();
+    expect(overlay.get()?.state.error).toContain("boom");
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.renderer.copyToClipboardOSC52).toHaveBeenCalledWith(
+      "HANDOFF DOC",
+    );
+  });
+
+  it("does not continue when there is nothing to send", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+
+    await startQuestion(startOptions({ ctx, setOverlay: overlay.set }));
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    expect(ctx.renderer.copyToClipboardOSC52).not.toHaveBeenCalled();
+  });
+
+  it("warns when retry has nothing to resend", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    ctx.client.session.create.mockRejectedValueOnce(new Error("offline"));
+    const overlay = captureOverlay();
+
+    await startQuestion(startOptions({ ctx, setOverlay: overlay.set }));
+    expect(overlay.get()?.state.error).toContain("offline");
+
+    overlay.get()?.onRetry();
+    await flushMicrotasks();
+
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Nothing to retry yet. Close and reopen the mini session.",
+      }),
+    );
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("aborts before creating a session when the plugin is disposed", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+
+    await startQuestion(startOptions({ ctx, isDisposed: () => true }));
+
+    expect(ctx.client.session.create).not.toHaveBeenCalled();
+    expect(ctx.data.on).not.toHaveBeenCalled();
+  });
+
   it("keeps the dialog open when the clipboard is unsupported", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());

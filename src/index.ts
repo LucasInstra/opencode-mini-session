@@ -41,6 +41,7 @@ export default Plugin.define({
     });
     let activeDialog: ActiveDialogController | undefined;
     let activeMode: MiniMode | undefined;
+    let disposed = false;
     const modelPickerOpen = { value: false };
 
     const modelPreference: ModelPreferenceState = {
@@ -167,6 +168,7 @@ export default Plugin.define({
         requestedMode: mode,
         activeMode,
         isVisible: activeDialog?.isVisible(),
+        forceReopen: handoff === true,
       });
 
       await runMiniRouteAction({
@@ -196,6 +198,7 @@ export default Plugin.define({
             getUpdateWarning: () => updateWarning(),
             initialQuestion,
             handoff,
+            isDisposed: () => disposed,
           });
           if (opened) {
             setOriginSessionID(sessionID);
@@ -210,6 +213,7 @@ export default Plugin.define({
     }
 
     return () => {
+      disposed = true;
       updateController.abort();
       unregisterSlot();
       void activeDialog?.close();

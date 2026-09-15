@@ -62,6 +62,7 @@ export type MiniSessionOptions = {
   getUpdateWarning?: () => string | undefined;
   initialQuestion?: string;
   handoff?: boolean;
+  isDisposed?: () => boolean;
 };
 
 export function openMiniSession(options: MiniSessionOptions): boolean {
@@ -100,13 +101,16 @@ export async function startQuestion(options: MiniSessionOptions) {
     getUpdateWarning,
     initialQuestion,
     handoff,
+    isDisposed,
   } = options;
+  const disposed = () => closed || isDisposed?.() === true;
   const [messages, models, providers, defaultModelResult] = await Promise.all([
     fetchSessionMessages(ctx, sessionID),
     fetchModels(ctx),
     fetchProviders(ctx),
     fetchDefaultModel(ctx),
   ]);
+  if (isDisposed?.()) return;
   const entries = getSessionEntries(messages);
   const copiedContext =
     mode === "main"
@@ -372,7 +376,15 @@ export async function startQuestion(options: MiniSessionOptions) {
         dialogState.streamingAnswer.trim()
       : "";
     const text = handoffMode ? handoffText : buildContinuePrompt(transcript);
-    if (continuing || dialogState.loading || dialogState.error || !text.trim())
+    const hasText = handoffMode
+      ? Boolean(handoffText.trim())
+      : Boolean(transcript.trim());
+    if (
+      continuing ||
+      dialogState.loading ||
+      (!handoffMode && Boolean(dialogState.error)) ||
+      !hasText
+    )
       return;
     continuing = true;
 
@@ -419,7 +431,13 @@ export async function startQuestion(options: MiniSessionOptions) {
 
   const retryLastPrompt = () => {
     if (closed || dialogState.loading) return;
-    if (!lastPrompt) return;
+    if (!lastPrompt) {
+      ctx.ui.toast.show({
+        variant: "warning",
+        message: "Nothing to retry yet. Close and reopen the mini session.",
+      });
+      return;
+    }
     if (!tempSessionID) {
       ctx.ui.toast.show({
         variant: "warning",
@@ -482,6 +500,7 @@ export async function startQuestion(options: MiniSessionOptions) {
       hideKey,
       toggleThinkingKeybind: config.toggleThinkingKeybind,
       continueLabel,
+      continueOnError: handoffMode,
       state: dialogState,
       onScroller: (scroller) => {
         overlayScroller = scroller;
@@ -561,7 +580,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     return;
   }
 
-  if (closed) return;
+  if (disposed()) return;
   system = buildMiniSystemPrompt(
     context,
     resolvedAgent,
@@ -742,7 +761,7 @@ export async function startQuestion(options: MiniSessionOptions) {
       clearSpinnerTimer();
     };
 
-    if (closed) {
+    if (disposed()) {
       try {
         await ctx.client.session.remove({ sessionID: ephemeralSessionID });
       } catch {}
