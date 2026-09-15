@@ -105,6 +105,7 @@ export type AnswerDialogProps = {
   hideKey: string | false;
   toggleThinkingKeybind: string | false;
   continueLabel: string;
+  continueOnError?: boolean;
   state: AnswerDialogState;
   onScroller?: (scroller: ScrollBoxRenderable | undefined) => void;
   onInput?: (input: InputRenderable | undefined) => void;
