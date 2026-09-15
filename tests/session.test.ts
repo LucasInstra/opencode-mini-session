@@ -568,6 +568,40 @@ describe("startQuestion", () => {
     );
   });
 
+  it("copies only the last assistant answer in handoff mode", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
+    (getSessionEntries as any).mockReturnValue([
+      assistantEntry({ id: "assistant-1", text: "first answer" }),
+      assistantEntry({ id: "assistant-2", text: "HANDOFF DOC" }),
+    ]);
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "write handoff",
+      }),
+    );
+
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+    expect(overlay.get()?.continueLabel).toBe("Copy handoff");
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.renderer.copyToClipboardOSC52).toHaveBeenCalledWith("HANDOFF DOC");
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Handoff copied to clipboard." }),
+    );
+  });
+
   it("keeps the dialog open when the clipboard is unsupported", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());

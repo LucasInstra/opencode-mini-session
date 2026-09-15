@@ -82,8 +82,8 @@ export default Plugin.define({
       config,
       isOverlayOpen: () => Boolean(overlay()),
       onSession: () => getCurrentRoute(ctx).kind === "session",
-      triggerMiniMode: (mode, source, initialQuestion) => {
-        void triggerMiniMode(mode, source, initialQuestion);
+      triggerMiniMode: (mode, source, initialQuestion, handoff) => {
+        void triggerMiniMode(mode, source, initialQuestion, handoff);
       },
       openModelPicker: () => {
         const route = getCurrentRoute(ctx);
@@ -157,6 +157,7 @@ export default Plugin.define({
       mode: MiniMode,
       source: "command" | "keybind",
       initialQuestion?: string,
+      handoff?: boolean,
     ) {
       const route = getCurrentRoute(ctx);
       if (route.kind !== "session") return;
@@ -194,6 +195,7 @@ export default Plugin.define({
               openPicker(sessionID, onAfterSelect),
             getUpdateWarning: () => updateWarning(),
             initialQuestion,
+            handoff,
           });
           if (opened) {
             setOriginSessionID(sessionID);

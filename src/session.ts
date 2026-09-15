@@ -61,6 +61,7 @@ export type MiniSessionOptions = {
   openPickerFn: (onAfterSelect: () => void) => void;
   getUpdateWarning?: () => string | undefined;
   initialQuestion?: string;
+  handoff?: boolean;
 };
 
 export function openMiniSession(options: MiniSessionOptions): boolean {
@@ -98,6 +99,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     openPickerFn,
     getUpdateWarning,
     initialQuestion,
+    handoff,
   } = options;
   const [messages, models, providers, defaultModelResult] = await Promise.all([
     fetchSessionMessages(ctx, sessionID),
@@ -123,9 +125,17 @@ export async function startQuestion(options: MiniSessionOptions) {
   const getModelName = () => formatResolvedModel(getResolvedModel());
   const hideKey = mode === "fresh" ? config.freshKeybind : config.keybind;
   const hiddenCommand = mode === "fresh" ? "/mini-fresh" : "/mini";
-  const title = mode === "fresh" ? "mini fresh" : "mini session";
-  const continueLabel =
-    config.continueAction === "clipboard" ? "Copy" : "Continue";
+  const handoffMode = handoff === true;
+  const title = handoffMode
+    ? "mini handoff"
+    : mode === "fresh"
+      ? "mini fresh"
+      : "mini session";
+  const continueLabel = handoffMode
+    ? "Copy handoff"
+    : config.continueAction === "clipboard"
+      ? "Copy"
+      : "Continue";
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
@@ -357,25 +367,31 @@ export async function startQuestion(options: MiniSessionOptions) {
 
   const continueInMainThread = async () => {
     const transcript = buildMiniSessionTranscript(dialogState);
-    if (continuing || dialogState.loading || dialogState.error || !transcript)
+    const handoffText = handoffMode
+      ? extractLastAssistantText(dialogState.entries) ||
+        dialogState.streamingAnswer.trim()
+      : "";
+    const text = handoffMode ? handoffText : buildContinuePrompt(transcript);
+    if (continuing || dialogState.loading || dialogState.error || !text.trim())
       return;
     continuing = true;
 
     try {
-      const text = buildContinuePrompt(transcript);
-
-      if (config.continueAction === "clipboard") {
+      if (handoffMode || config.continueAction === "clipboard") {
         if (!copyTextToClipboard(ctx, text)) {
           ctx.ui.toast.show({
             variant: "error",
-            message:
-              "Clipboard is not supported by this terminal. Use continueAction \"queue\" or copy from the transcript.",
+            message: handoffMode
+              ? "Clipboard is not supported by this terminal; the handoff was not copied."
+              : 'Clipboard is not supported by this terminal. Use continueAction "queue" or copy from the transcript.',
           });
           return;
         }
         ctx.ui.toast.show({
           variant: "success",
-          message: "Side answer copied to clipboard.",
+          message: handoffMode
+            ? "Handoff copied to clipboard."
+            : "Side answer copied to clipboard.",
         });
         await cleanup();
         return;
@@ -980,6 +996,22 @@ export function extractAssistantText(
     }
   }
   return chunks.join("\n\n").trim();
+}
+
+export function extractLastAssistantText(
+  entries: AnswerDialogState["entries"],
+): string {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.info.type !== "assistant") continue;
+    const text = entry.parts
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function buildMiniSessionTranscript(state: AnswerDialogState) {

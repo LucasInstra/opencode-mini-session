@@ -56,6 +56,7 @@ Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
 | `alt+n` (configurable) | Toggle fresh mini session overlay |
 | `/mini [question]` | Open mini session with copied session context, optionally asking immediately |
 | `/mini-fresh [question]` | Open mini session with no copied session context, optionally asking immediately |
+| `/mini-handoff [instructions]` | Write a handoff document from this session and copy it to the clipboard |
 | `/mini-model` | Change model for future mini sessions |
 
 ### Inside the mini session
@@ -150,6 +151,15 @@ The mini session receives the main session's conversation as plain text:
 Oldest messages are dropped to fit the `tokenLimit`, and the result is injected into the system prompt inside `<session-context>` tags.
 
 Fresh mini mode skips this copied-context step entirely.
+
+## Session handoff
+
+`/mini-handoff` turns the current session into a handoff document for a new session. It opens the mini overlay with the copied session context and asks the model to produce a concise markdown handoff: goal and status, decisions, files and commands, verification done, open questions, and next steps.
+
+- Add extra instructions after the command, for example `/mini-handoff focus on the migration work`.
+- The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52).
+- Clipboard support is required for this mode: if the terminal cannot copy (no OSC 52), the overlay stays open and reports it instead of losing the text.
+- Refine the document with follow-up questions in the same overlay, then copy the final version.
 
 ## Troubleshooting
 
