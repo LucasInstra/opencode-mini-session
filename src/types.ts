@@ -114,6 +114,7 @@ export type AnswerDialogProps = {
   onClose: () => void;
   onContinue: () => void;
   onRetry: () => void;
+  onEmptySubmit?: () => void;
   onChangeModel: () => void;
   onToggleThinking: () => void;
   onToggleThinkingPart: (partID: string) => void;

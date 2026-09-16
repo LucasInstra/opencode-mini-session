@@ -88,7 +88,7 @@ Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client
 | Key | Action |
 |---|---|
 | `enter` | Send question / follow-up |
-| `shift+enter` | Continue in the main thread (queues the transcript, or copies it with `continueAction: "clipboard"`) |
+| `shift+enter` (or `enter` with the input empty) | Continue in the main thread (queues the transcript, or copies it with `continueAction: "clipboard"`) |
 | `alt+b` or `alt+n` (configurable) | Hide overlay, resumable |
 | `ctrl+t` (configurable) | Toggle thinking blocks |
 | `tab` | Change the model for the next question |
@@ -181,7 +181,7 @@ Fresh mini mode skips this copied-context step entirely.
 `/mini-handoff` turns the current session into a handoff document for a new session. It opens the mini overlay with the copied session context and asks the model to produce a concise markdown handoff: goal and status, decisions, files and commands, verification done, open questions, and next steps.
 
 - Add extra instructions after the command, for example `/mini-handoff focus on the migration work`.
-- The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52).
+- The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52). On terminals that cannot send `shift+enter`, pressing `enter` with the input empty does the same.
 - Clipboard support is required for this mode: if the terminal cannot copy (no OSC 52), the overlay stays open and reports it instead of losing the text.
 - Refine the document with follow-up questions in the same overlay, then copy the final version.
 
@@ -208,6 +208,10 @@ opencode
 ### `Invalid V2 TUI plugin module`
 
 The installed package is the 1.x release, which targets OpenCode 1. Install the 2.x release (see [Installation](#installation)) and restart OpenCode.
+
+### `shift+enter` does not copy or continue
+
+Some terminals cannot distinguish `shift+enter` from `enter` without extended keyboard support. Press `enter` with the input empty to run the same action, or click the button with the mouse. The overlay reports when the terminal cannot copy (no OSC 52) instead of losing the text.
 
 ### Git package installs are refused
 
