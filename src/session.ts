@@ -155,6 +155,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     : config.continueAction === "clipboard"
       ? "Copy"
       : "Continue";
+  const copiesToClipboard = handoffMode || config.continueAction === "clipboard";
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
@@ -385,6 +386,14 @@ export async function startQuestion(options: MiniSessionOptions) {
   };
 
   const continueInMainThread = async () => {
+    if (continuing) return;
+    if (dialogState.loading) {
+      ctx.ui.toast.show({
+        variant: "warning",
+        message: "Wait for the response to finish.",
+      });
+      return;
+    }
     const transcript = buildMiniSessionTranscript(dialogState);
     const handoffText = handoffMode
       ? extractLastAssistantText(dialogState.entries) ||
@@ -394,13 +403,16 @@ export async function startQuestion(options: MiniSessionOptions) {
     const hasText = handoffMode
       ? Boolean(handoffText.trim())
       : Boolean(transcript.trim());
-    if (
-      continuing ||
-      dialogState.loading ||
-      (!handoffMode && Boolean(dialogState.error)) ||
-      !hasText
-    )
+    if (!hasText) {
+      if (handoffMode) {
+        ctx.ui.toast.show({
+          variant: "warning",
+          message: "No handoff document yet.",
+        });
+      }
       return;
+    }
+    if (!handoffMode && dialogState.error) return;
     continuing = true;
 
     try {
@@ -527,6 +539,9 @@ export async function startQuestion(options: MiniSessionOptions) {
       onClose: () => void closeFromUser(),
       onContinue: () => void continueInMainThread(),
       onRetry: retryLastPrompt,
+      onEmptySubmit: copiesToClipboard
+        ? () => void continueInMainThread()
+        : undefined,
       onChangeModel: () =>
         openPickerFn(() => renderOverlay({ focusInput: true })),
       onToggleThinking: toggleThinking,
@@ -1100,7 +1115,7 @@ function formatSessionModelKey(resolved: ResolvedModel) {
   return `${resolved.model.providerID}/${resolved.model.modelID}${resolved.variant ? `#${resolved.variant}` : ""}`;
 }
 
-function copyTextToClipboard(ctx: TuiContext, text: string): boolean {
+export function copyTextToClipboard(ctx: TuiContext, text: string): boolean {
   const renderer = ctx.renderer as {
     isOsc52Supported?: () => boolean;
     copyToClipboardOSC52?: (value: string) => boolean;

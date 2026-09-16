@@ -699,6 +699,71 @@ describe("startQuestion", () => {
     expect(ctx.data.on).not.toHaveBeenCalled();
   });
 
+  it("exposes an empty-submit copy action only for copy modes", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+
+    const handoffOverlay = captureOverlay();
+    await startQuestion(
+      startOptions({ ctx, setOverlay: handoffOverlay.set, handoff: true }),
+    );
+    expect(typeof handoffOverlay.get()?.onEmptySubmit).toBe("function");
+
+    const queueOverlay = captureOverlay();
+    await startQuestion(startOptions({ ctx, setOverlay: queueOverlay.set }));
+    expect(queueOverlay.get()?.onEmptySubmit).toBeUndefined();
+
+    const clipboardOverlay = captureOverlay();
+    await startQuestion(
+      startOptions({
+        ctx,
+        config: config({ continueAction: "clipboard" }),
+        setOverlay: clipboardOverlay.set,
+      }),
+    );
+    expect(typeof clipboardOverlay.get()?.onEmptySubmit).toBe("function");
+  });
+
+  it("warns when continuing while a response is still loading", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+
+    await startQuestion(startOptions({ ctx, setOverlay: overlay.set }));
+    expect(overlay.get()?.onSubmit("hello")).toBe(true);
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Wait for the response to finish." }),
+    );
+    expect(ctx.client.session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when the handoff has no document yet", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({ ctx, setOverlay: overlay.set, handoff: true }),
+    );
+
+    overlay.get()?.onContinue();
+    await flushMicrotasks();
+
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "No handoff document yet." }),
+    );
+  });
+
   it("keeps the dialog open when the clipboard is unsupported", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());

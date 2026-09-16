@@ -302,7 +302,11 @@ export function AnswerDialog(props: AnswerDialogProps) {
               }}
               onSubmit={() => {
                 const submitted = (input?.value || inputValue).trim();
-                if (!submitted || props.state.loading) return;
+                if (!submitted) {
+                  props.onEmptySubmit?.();
+                  return;
+                }
+                if (props.state.loading) return;
                 if (!props.onSubmit(submitted)) return;
                 inputValue = "";
                 if (input) input.value = "";
@@ -468,6 +472,7 @@ export function createOverlaySlot(options: {
             onClose={current().onClose}
             onContinue={current().onContinue}
             onRetry={current().onRetry}
+            onEmptySubmit={current().onEmptySubmit}
             onChangeModel={current().onChangeModel}
             onToggleThinking={current().onToggleThinking}
             onToggleThinkingPart={current().onToggleThinkingPart}
