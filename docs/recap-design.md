@@ -1,7 +1,7 @@
 # `/mini-recap` — design notes
 
-> Status: **draft, not implemented.** This branch (`v2-recap`) is stacked on `v2-features`
-> (the feature PR #26); the recap PR lands after the V2 port (#25) and the features (#26).
+> Status: **implemented (v1)** on this branch, which is stacked on `v2-features` (the feature
+> PR #26); the recap PR lands after the V2 port (#25) and the features (#26).
 >
 > The numbers below come from a real dry run on a live database (108 sessions): the term
 > `mini-session` matched 5 root sessions, of which only 2 were actually about the project —
@@ -28,7 +28,7 @@ bounded digest, and asks the model for a consolidated recap.
 - Collection is local: no new server API, no index. Cost is a single bounded model call.
 - Work is bounded and cancelable: caps on scanned sessions, sessions included and tokens;
   `esc` aborts in-flight fetches.
-- Reuse the existing mini overlay: streaming, token counter, `continueAction`
+- Reuse the existing mini overlay: streaming, token counter, the continue mode
   (queue/clipboard), persisted preferences and the OSC 52 clipboard helper.
 
 ## Non-goals (v1)
@@ -57,7 +57,7 @@ Flow:
    score. `enter` confirms, `space` toggles. `--yes` skips this step.
 3. **Generate** — one prompt with the digest in the mini overlay.
 4. **Act** — the mini overlay actions: **Copy recap** (OSC 52), **Save** (`recaps/<slug>-<date>.md`),
-   **Continue** (queue into the main session, existing `continueAction`). Follow-up questions
+   **Continue** (queue into the main session, or **Copy** in clipboard mode). Follow-up questions
    work in the same overlay without re-scanning, because the digest stays in the mini session.
 
 ## Design
@@ -146,7 +146,7 @@ numbers are never model-generated.
 - **Copy recap** — reuse `copyToClipboardOSC52` from the handoff mode.
 - **Save** (P1) — write `recaps/<slug>-<YYYY-MM-DD>.md` next to the project root and toast
   the path.
-- **Continue** — existing `continueAction` (queue or clipboard).
+- **Continue** — the overlay's current continue mode (queue or clipboard). Recap mode itself is fixed to **Copy recap**.
 - Follow-ups reuse the digest already attached to the mini session.
 
 ## Configuration
@@ -215,3 +215,15 @@ numbers are never model-generated.
   messages after the last compaction, while `session.export` returns everything.
 - Upstream bug to report: `GET /api/session?search=` is accepted but ignored. If fixed, the
   content pass can go away and the feature becomes cheaper and more precise.
+
+## Implementation notes (v1)
+
+Implemented: `/mini-recap [term] [--all] [--exclude <term>]`, the two-pass scan (title pass,
+then a bounded content pass with `parentID: null` and cursor paging), the scoring model, the
+digest with per-session and global budgets, the recap mode in the mini overlay with `esc`
+cancellation (the scan signal is forwarded to the client fetches), unreadable-session
+counters, README documentation and unit tests.
+
+Not implemented yet, kept here as future work: the `--since`, `--yes`, `--refresh` and
+`--handoff` flags, the selection picker, compaction summaries as the primary source, and
+server-side search (still ignored by the server).
