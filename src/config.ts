@@ -3,6 +3,9 @@ import {
   DEFAULT_FRESH_KEYBIND,
   DEFAULT_FULL_TOKEN_LIMIT,
   DEFAULT_KEYBIND,
+  DEFAULT_RECAP_MIN_SCORE,
+  DEFAULT_RECAP_SCAN_LIMIT,
+  DEFAULT_RECAP_SESSIONS,
   DEFAULT_TOGGLE_THINKING_KEYBIND,
   MINI_TOOL_ACTIONS,
 } from "./constants";
@@ -33,6 +36,21 @@ export function parseConfig(options: unknown): MiniConfig {
     continueAction:
       input.continueAction === "clipboard" ? "clipboard" : "queue",
     cleanupStaleSessions: input.cleanupStaleSessions !== false,
+    recapKeybind: parseKeybind(input.recapKeybind, false),
+    recapScope: input.recapScope === "all" ? "all" : "project",
+    recapSessions: parsePositiveNumber(
+      input.recapSessions,
+      DEFAULT_RECAP_SESSIONS,
+    ),
+    recapScanLimit: parsePositiveNumber(
+      input.recapScanLimit,
+      DEFAULT_RECAP_SCAN_LIMIT,
+    ),
+    recapMinScore: parseNonNegativeNumber(
+      input.recapMinScore,
+      DEFAULT_RECAP_MIN_SCORE,
+    ),
+    recapExcludeDirs: parseStringList(input.recapExcludeDirs),
   };
 }
 
@@ -42,7 +60,28 @@ function parsePositiveNumber(value: unknown, fallback: number) {
     : fallback;
 }
 
-function parseKeybind(value: unknown, fallback: string): string | false {
+function parseNonNegativeNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+function parseStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function parseKeybind(
+  value: unknown,
+  fallback: string | false,
+): string | false {
   if (value === false) return false;
   if (typeof value !== "string") return fallback;
   const keybind = value.trim();

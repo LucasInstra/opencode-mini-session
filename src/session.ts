@@ -21,6 +21,11 @@ import {
   resolveModelContextWindow,
 } from "./model";
 import { getCurrentRoute, type TuiContext } from "./opencode";
+import {
+  collectRecapContext,
+  fallbackRecapTerm,
+  formatRecapNotice,
+} from "./recap";
 import type {
   ActiveDialog,
   AnswerDialogState,
@@ -29,6 +34,7 @@ import type {
   ModelPreference,
   ModelPreferenceState,
   OverlayState,
+  RecapQuery,
   ResolvedModel,
   ThinkingPreferenceState,
 } from "./types";
@@ -77,6 +83,7 @@ export type MiniSessionOptions = {
   getUpdateWarning?: () => string | undefined;
   initialQuestion?: string;
   handoff?: boolean;
+  recap?: RecapQuery;
   isDisposed?: () => boolean;
 };
 
@@ -116,6 +123,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     getUpdateWarning,
     initialQuestion,
     handoff,
+    recap,
     isDisposed,
   } = options;
   const disposed = () => closed || isDisposed?.() === true;
@@ -131,7 +139,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     mode === "main"
       ? buildCopiedContext(entries, config.tokenLimit)
       : { text: "", usedTokens: undefined, totalAvailableTokens: undefined };
-  const context = copiedContext.text;
+  let context = copiedContext.text;
   const defaultResolvedModel = resolveDefaultModel(
     models,
     config.model,
@@ -142,20 +150,33 @@ export async function startQuestion(options: MiniSessionOptions) {
   const getResolvedModel = () =>
     modelPreference.get() ?? defaultResolvedModel.model;
   const getModelName = () => formatResolvedModel(getResolvedModel());
-  const hideKey = mode === "fresh" ? config.freshKeybind : config.keybind;
-  const hiddenCommand = mode === "fresh" ? "/mini-fresh" : "/mini";
+  const hideKey =
+    mode === "recap"
+      ? config.recapKeybind
+      : mode === "fresh"
+        ? config.freshKeybind
+        : config.keybind;
+  const hiddenCommand =
+    mode === "recap" ? "/mini-recap" : mode === "fresh" ? "/mini-fresh" : "/mini";
   const handoffMode = handoff === true;
-  const title = handoffMode
-    ? "mini handoff"
-    : mode === "fresh"
-      ? "mini fresh"
-      : "mini session";
-  const continueLabel = handoffMode
-    ? "Copy handoff"
-    : config.continueAction === "clipboard"
-      ? "Copy"
-      : "Continue";
-  const copiesToClipboard = handoffMode || config.continueAction === "clipboard";
+  const recapMode = mode === "recap";
+  const documentMode = handoffMode || recapMode;
+  const title = recapMode
+    ? "mini recap"
+    : handoffMode
+      ? "mini handoff"
+      : mode === "fresh"
+        ? "mini fresh"
+        : "mini session";
+  const continueLabel = recapMode
+    ? "Copy recap"
+    : handoffMode
+      ? "Copy handoff"
+      : config.continueAction === "clipboard"
+        ? "Copy"
+        : "Continue";
+  const copiesToClipboard =
+    documentMode || config.continueAction === "clipboard";
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
@@ -189,6 +210,8 @@ export async function startQuestion(options: MiniSessionOptions) {
   let closed = false;
   let hidden = false;
   let continuing = false;
+  let recapNotice: string | undefined;
+  const scanController = new AbortController();
   let renderTimer: ReturnType<typeof setTimeout> | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let scrollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -361,6 +384,7 @@ export async function startQuestion(options: MiniSessionOptions) {
   const cleanup = async () => {
     if (closed) return;
     closed = true;
+    scanController.abort();
     if (active.get() === controller) active.set(undefined);
     while (unsubscribers.length > 0) {
       try {
@@ -395,42 +419,48 @@ export async function startQuestion(options: MiniSessionOptions) {
       return;
     }
     const transcript = buildMiniSessionTranscript(dialogState);
-    const handoffText = handoffMode
+    const documentText = documentMode
       ? extractLastAssistantText(dialogState.entries) ||
         dialogState.streamingAnswer.trim()
       : "";
-    const text = handoffMode ? handoffText : buildContinuePrompt(transcript);
-    const hasText = handoffMode
-      ? Boolean(handoffText.trim())
+    const text = documentMode ? documentText : buildContinuePrompt(transcript);
+    const hasText = documentMode
+      ? Boolean(documentText.trim())
       : Boolean(transcript.trim());
     if (!hasText) {
-      if (handoffMode) {
+      if (documentMode) {
         ctx.ui.toast.show({
           variant: "warning",
-          message: "No handoff document yet.",
+          message: recapMode
+            ? "No recap document yet."
+            : "No handoff document yet.",
         });
       }
       return;
     }
-    if (!handoffMode && dialogState.error) return;
+    if (!documentMode && dialogState.error) return;
     continuing = true;
 
     try {
-      if (handoffMode || config.continueAction === "clipboard") {
+      if (documentMode || config.continueAction === "clipboard") {
         if (!copyTextToClipboard(ctx, text)) {
           ctx.ui.toast.show({
             variant: "error",
-            message: handoffMode
-              ? "Clipboard is not supported by this terminal; the handoff was not copied."
-              : 'Clipboard is not supported by this terminal. Use continueAction "queue" or copy from the transcript.',
+            message: recapMode
+              ? "Clipboard is not supported by this terminal; the recap was not copied."
+              : handoffMode
+                ? "Clipboard is not supported by this terminal; the handoff was not copied."
+                : 'Clipboard is not supported by this terminal. Use continueAction "queue" or copy from the transcript.',
           });
           return;
         }
         ctx.ui.toast.show({
           variant: "success",
-          message: handoffMode
-            ? "Handoff copied to clipboard."
-            : "Side answer copied to clipboard.",
+          message: recapMode
+            ? "Recap copied to clipboard."
+            : handoffMode
+              ? "Handoff copied to clipboard."
+              : "Side answer copied to clipboard.",
         });
         await cleanup();
         return;
@@ -527,7 +557,7 @@ export async function startQuestion(options: MiniSessionOptions) {
       hideKey,
       toggleThinkingKeybind: config.toggleThinkingKeybind,
       continueLabel,
-      continueOnError: handoffMode,
+      continueOnError: documentMode,
       state: dialogState,
       onScroller: (scroller) => {
         overlayScroller = scroller;
@@ -598,6 +628,44 @@ export async function startQuestion(options: MiniSessionOptions) {
   active.set(controller);
   renderOverlay({ focusInput: true });
 
+  if (recapMode) {
+    const query = recap ?? {
+      term: fallbackRecapTerm(ctx.location?.directory),
+      excludes: [],
+    };
+    dialogState.notice = `Scanning sessions for "${query.term}"...`;
+    renderOverlay();
+    const digest = await collectRecapContext({
+      ctx,
+      config,
+      query,
+      directory: ctx.location?.directory,
+      signal: scanController.signal,
+      onProgress: (message) => {
+        if (closed || hidden) return;
+        dialogState.notice = message;
+        scheduleRenderOverlay();
+      },
+    });
+    if (closed || disposed()) return;
+    if (digest.included === 0) {
+      ctx.ui.toast.show({
+        variant: "warning",
+        message:
+          digest.considered === 0
+            ? `No sessions found for "${digest.term}".`
+            : `No sessions mention "${digest.term}".`,
+      });
+      await cleanup();
+      return;
+    }
+    context = digest.text;
+    recapNotice = formatRecapNotice(digest);
+    dialogState.copiedContextTokens = digest.usedTokens;
+    dialogState.copiedContextTotalTokens = digest.availableTokens;
+    renderOverlay();
+  }
+
   try {
     resolvedAgent = await resolveRuntimeMiniAgent(ctx, config);
   } catch (cause) {
@@ -618,6 +686,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     ctx.location?.directory,
   );
   dialogState.notice = formatMiniNotice(
+    recapNotice,
     defaultResolvedModel.notice,
     ...resolvedAgent.notices,
   );

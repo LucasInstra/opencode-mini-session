@@ -9,6 +9,7 @@ import {
   CMD_OPEN_FRESH,
   CMD_PAGE_DOWN,
   CMD_PAGE_UP,
+  CMD_RECAP,
   CMD_SCROLL_BOTTOM,
   CMD_SCROLL_DOWN,
   CMD_SCROLL_TOP,
@@ -20,7 +21,7 @@ import {
   SCROLL_LINE_DELTA,
   SCROLL_PAGE_DELTA,
 } from "./constants";
-import type { MiniConfig, MiniMode } from "./types";
+import type { MiniConfig, MiniMode, RecapQuery } from "./types";
 
 export type MiniKeybindActions = {
   config: MiniConfig;
@@ -30,7 +31,9 @@ export type MiniKeybindActions = {
     source: "command" | "keybind",
     initialQuestion?: string,
     handoff?: boolean,
+    recap?: RecapQuery,
   ) => void;
+  triggerRecap: (input: string | undefined) => void;
   openModelPicker: () => void;
   hideOverlay: () => void;
   closeOverlay: () => void;
@@ -144,6 +147,31 @@ export function buildGlobalCommands(
       enabled: onSession,
       run: (input) =>
         triggerMiniMode("main", "command", buildHandoffPrompt(input), true),
+    },
+    ...(config.recapKeybind
+      ? [
+          {
+            id: `${CMD_RECAP}.keybind`,
+            title: "Recap project sessions",
+            description:
+              "Write a recap of past sessions that mention the current project",
+            group: "Mini session",
+            bind: config.recapKeybind,
+            enabled: onSession,
+            run: () => actions.triggerRecap(undefined),
+          } satisfies KeymapCommand,
+        ]
+      : []),
+    {
+      id: `${CMD_RECAP}.command`,
+      title: "Recap project sessions",
+      description:
+        "Write a recap of past sessions that mention a term (/mini-recap <term> [--all] [--exclude <term>])",
+      group: "Mini session",
+      palette: true,
+      slash: { name: "mini-recap", arguments: true },
+      enabled: onSession,
+      run: (input) => actions.triggerRecap(input),
     },
   ];
 }

@@ -16,6 +16,7 @@ export const CMD_PAGE_DOWN = "mini.page-down";
 export const CMD_SCROLL_TOP = "mini.scroll-top";
 export const CMD_SCROLL_BOTTOM = "mini.scroll-bottom";
 export const CMD_HANDOFF = "mini.handoff";
+export const CMD_RECAP = "mini.recap";
 
 export const SCROLL_LINE_DELTA = 4;
 export const SCROLL_PAGE_DELTA = 14;
@@ -24,6 +25,9 @@ export const DEFAULT_FULL_TOKEN_LIMIT = 50_000;
 export const DEFAULT_KEYBIND = "alt+b";
 export const DEFAULT_FRESH_KEYBIND = "alt+n";
 export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
+export const DEFAULT_RECAP_SESSIONS = 15;
+export const DEFAULT_RECAP_SCAN_LIMIT = 50;
+export const DEFAULT_RECAP_MIN_SCORE = 4;
 export const THINKING_TEXT = "Thinking...";
 
 /**
@@ -51,6 +55,13 @@ export const MINI_SESSION_METADATA_KEY = "opencodeMiniSession";
 
 /** Mini sessions older than this are treated as leaked by a crashed client. */
 export const STALE_MINI_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Initial question for `/mini-recap`: turns the digest of past sessions into a
+ * consolidated project recap.
+ */
+export const RECAP_PROMPT =
+  "You are writing a consolidated recap of a project from several past assistant sessions. The digest of those sessions is provided above: each section has the session title, id, period, directory, the objective, sampled requests with dates, extracted facts (commits, PRs, versions, paths, URLs) and the final reported state. Write the recap from the digest only; do not investigate the workspace and do not call tools. If the digest is empty or insufficient, say so briefly instead of guessing. Produce a concise markdown document with these sections: Objetivo, Linha do tempo, Decisões, Estado atual, Pendências / questões em aberto, Próximos passos, Fontes (list the sessions used, with id and date). Do not invent details; cite the session and date next to claims when you can; if two sessions disagree, say so explicitly. Reply with the recap document only, in the same language as the session content (the digest labels may be in English); do not add an introduction or a closing comment.";
 
 /**
  * Initial question for `/mini-handoff`: turns the copied session context into a

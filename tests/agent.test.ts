@@ -24,6 +24,12 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     tools: [...DEFAULT_ALLOWED_TOOLS],
     continueAction: "queue",
     cleanupStaleSessions: true,
+    recapKeybind: false,
+    recapScope: "project",
+    recapSessions: 15,
+    recapScanLimit: 50,
+    recapMinScore: 4,
+    recapExcludeDirs: [],
     ...overrides,
   };
 }
@@ -149,6 +155,30 @@ describe("config parsing", () => {
       parseConfig({ cleanupStaleSessions: false }).cleanupStaleSessions,
     ).toBe(false);
   });
+
+  it("parses the recap options", () => {
+    const defaults = parseConfig({});
+    expect(defaults.recapKeybind).toBe(false);
+    expect(defaults.recapScope).toBe("project");
+    expect(defaults.recapSessions).toBe(15);
+    expect(defaults.recapScanLimit).toBe(50);
+    expect(defaults.recapMinScore).toBe(4);
+    expect(defaults.recapExcludeDirs).toEqual([]);
+
+    expect(parseConfig({ recapKeybind: "alt+r" }).recapKeybind).toBe("alt+r");
+    expect(parseConfig({ recapKeybind: "none" }).recapKeybind).toBe(false);
+    expect(parseConfig({ recapScope: "all" }).recapScope).toBe("all");
+    expect(parseConfig({ recapScope: "bogus" }).recapScope).toBe("project");
+    expect(parseConfig({ recapSessions: 3.9 }).recapSessions).toBe(3);
+    expect(parseConfig({ recapSessions: 0 }).recapSessions).toBe(15);
+    expect(parseConfig({ recapScanLimit: "10" }).recapScanLimit).toBe(50);
+    expect(parseConfig({ recapMinScore: 0 }).recapMinScore).toBe(0);
+    expect(parseConfig({ recapMinScore: -1 }).recapMinScore).toBe(4);
+    expect(
+      parseConfig({ recapExcludeDirs: [" /tmp/private ", "/tmp/private", 7] })
+        .recapExcludeDirs,
+    ).toEqual(["/tmp/private"]);
+  });
 });
 
 describe("agent resolution", () => {
@@ -249,6 +279,15 @@ describe("system prompts", () => {
     expect(prompt).toContain("<session-context>\nmain context\n</session-context>");
     expect(prompt).toContain("You may only use the following tools");
     expect(prompt).not.toContain("configured OpenCode agent");
+  });
+
+  it("uses the recap instruction and context tag in recap mode", () => {
+    const resolved = resolveMiniAgent(config(), []);
+    const prompt = buildMiniSystemPrompt("digest text", resolved, "recap");
+
+    expect(prompt).toContain("consolidated recap");
+    expect(prompt).toContain("<recap-context>\ndigest text\n</recap-context>");
+    expect(prompt).not.toContain("<session-context>");
   });
 
   it("guides file reads toward the read tool with the working directory", () => {

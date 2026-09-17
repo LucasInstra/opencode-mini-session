@@ -21,10 +21,15 @@ vi.mock("../src/agent", async () => {
   };
 });
 
-vi.mock("../src/context", () => ({
-  getSessionEntries,
-  buildCopiedContext,
-}));
+vi.mock("../src/context", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/context")>("../src/context");
+  return {
+    ...actual,
+    getSessionEntries,
+    buildCopiedContext,
+  };
+});
 
 import {
   openMiniSession,
@@ -71,6 +76,12 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     tools: ["read", "glob", "grep", "webfetch"],
     continueAction: "queue",
     cleanupStaleSessions: true,
+    recapKeybind: false,
+    recapScope: "project",
+    recapSessions: 15,
+    recapScanLimit: 50,
+    recapMinScore: 4,
+    recapExcludeDirs: [],
     ...overrides,
   };
 }
@@ -1389,5 +1400,145 @@ describe("startQuestion", () => {
         message: "Failed to open mini session: agent lookup failed",
       }),
     );
+  });
+});
+
+describe("recap mode", () => {
+  function recapSession(title: string) {
+    return {
+      id: "ses_recap",
+      title,
+      time: { created: 1, updated: 2 },
+      location: { directory: "/tmp/project" },
+    };
+  }
+
+  it("warns and closes when no sessions match", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const sessionList = vi.fn(async () => ({ data: [], cursor: {} }));
+    (ctx.client.session as any).list = sessionList;
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        mode: "recap",
+        recap: { term: "mini session", excludes: [] },
+        initialQuestion: "RECAP",
+      }),
+    );
+
+    expect(sessionList).toHaveBeenCalledWith({ limit: 50, order: "desc" });
+    expect(ctx.client.session.create).not.toHaveBeenCalled();
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: "warning",
+        message: 'No sessions found for "mini session".',
+      }),
+    );
+  });
+
+  it("scans matching sessions and submits the recap prompt", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const session = recapSession("mini session port");
+    (ctx.client.session as any).list = vi.fn(async () => ({
+      data: [session],
+      cursor: {},
+    }));
+    (ctx.client.session as any).export = vi.fn(async () => ({
+      info: session,
+      messages: [
+        {
+          id: "m1",
+          type: "user",
+          text: "work on the mini session port",
+          time: { created: 1 },
+        },
+        {
+          id: "m2",
+          type: "assistant",
+          content: [{ type: "text", text: "done" }],
+          time: { created: 2 },
+        },
+      ],
+    }));
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        mode: "recap",
+        recap: { term: "mini session", excludes: [] },
+        initialQuestion: "RECAP PROMPT",
+      }),
+    );
+
+    expect(ctx.client.session.export).toHaveBeenCalledWith({
+      sessionID: "ses_recap",
+    });
+    expect(ctx.client.session.create).toHaveBeenCalled();
+    expect(ctx.client.session.prompt).toHaveBeenCalledWith({
+      sessionID: "mini-session",
+      text: "RECAP PROMPT",
+    });
+    expect(ctx.ui.toast.show).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: "warning" }),
+    );
+  });
+
+  it("uses the recap keybind in the hide toast", async () => {
+    vi.useFakeTimers();
+    const agentResolution = deferred<any>();
+    resolveRuntimeMiniAgent.mockReturnValue(agentResolution.promise);
+
+    const ctx = fakeCtx();
+    const session = recapSession("mini session port");
+    (ctx.client.session as any).list = vi.fn(async () => ({
+      data: [session],
+      cursor: {},
+    }));
+    (ctx.client.session as any).export = vi.fn(async () => ({
+      info: session,
+      messages: [
+        {
+          id: "m1",
+          type: "user",
+          text: "mini session",
+          time: { created: 1 },
+        },
+      ],
+    }));
+
+    let activeDialog: ActiveDialogController | undefined;
+    const opening = startQuestion(
+      startOptions({
+        ctx,
+        mode: "recap",
+        config: config({ recapKeybind: "alt+r" }),
+        recap: { term: "mini session", excludes: [] },
+        active: {
+          get: () => activeDialog,
+          set: (dialog: ActiveDialogController | undefined) => {
+            activeDialog = dialog;
+          },
+        },
+      }),
+    );
+
+    await flushMicrotasks(50);
+    activeDialog?.hide();
+
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "mini hidden. Press alt+r to show it.",
+      }),
+    );
+
+    agentResolution.resolve(resolvedAgent());
+    await opening;
   });
 });

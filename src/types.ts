@@ -5,6 +5,14 @@ import type { TuiContext } from "./opencode";
 
 export type ContinueAction = "queue" | "clipboard";
 
+export type RecapScope = "project" | "all";
+
+export type RecapQuery = {
+  term: string;
+  excludes: string[];
+  scope?: RecapScope;
+};
+
 export type MiniConfig = {
   model: string | null;
   variant: string | null;
@@ -17,9 +25,15 @@ export type MiniConfig = {
   tools: string[];
   continueAction: ContinueAction;
   cleanupStaleSessions: boolean;
+  recapKeybind: string | false;
+  recapScope: RecapScope;
+  recapSessions: number;
+  recapScanLimit: number;
+  recapMinScore: number;
+  recapExcludeDirs: string[];
 };
 
-export type MiniMode = "main" | "fresh";
+export type MiniMode = "main" | "fresh" | "recap";
 
 export type SessionToolStatus = "streaming" | "running" | "completed" | "error";
 

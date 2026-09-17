@@ -9,6 +9,9 @@ const MINI_SIDE_QUESTION_INSTRUCTION =
 const MINI_FRESH_INSTRUCTION =
   "You are answering a quick side question about an ongoing coding session. No conversation context from the main session has been copied into this mini session. Answer concisely based only on the current mini-session messages and any tools or files you inspect.";
 
+const MINI_RECAP_INSTRUCTION =
+  "You are writing a consolidated recap of a project from a digest of past assistant sessions. The digest is provided below: each section covers one session with its objective, sampled requests, extracted facts and final reported state. Write the recap from the digest only; do not investigate the workspace and do not call tools.";
+
 export type MiniAgentMode = "plugin-managed" | "custom-agent";
 export type MiniPermissionSource = "plugin-managed" | "agent";
 
@@ -149,14 +152,20 @@ export function buildMiniSystemPrompt(
       ? buildToolSystemNote(resolved.tools, directory)
       : "";
 
+  const tag = mode === "recap" ? "recap-context" : "session-context";
   const sessionContext = context.trim()
-    ? `\n\n<session-context>\n${context}\n</session-context>`
+    ? `\n\n<${tag}>\n${context}\n</${tag}>`
     : "";
 
   return `${intro}${toolNote}${sessionContext}`;
 }
 
 function buildMiniSystemIntro(resolved: ResolvedMiniAgent, mode: MiniMode) {
+  if (mode === "recap") {
+    if (resolved.mode !== "custom-agent") return MINI_RECAP_INSTRUCTION;
+    return `You are writing a consolidated recap of a project from a digest of past assistant sessions and you are running as the configured OpenCode agent "${resolved.agent}". Follow that agent's own instructions, role, tone, and constraints closely while producing this recap. Below is the digest of past sessions.`;
+  }
+
   if (resolved.mode !== "custom-agent") {
     return mode === "fresh"
       ? MINI_FRESH_INSTRUCTION
