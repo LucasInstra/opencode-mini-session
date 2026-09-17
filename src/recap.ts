@@ -54,6 +54,10 @@ export type RecapDigest = {
   matches: number;
   /** Matching sessions dropped because the token budget was exhausted. */
   skipped: number;
+  /** Sessions that were scanned for content. */
+  scanned: number;
+  /** Sessions that could not be read while scanning. */
+  unreadable: number;
 };
 
 export type RecapProgress = (message: string) => void;
@@ -211,11 +215,16 @@ export function extractRecapMilestones(
   max: number,
 ): RecapMessage[] {
   if (max <= 0) return [];
-  const requests = messages.filter((message) => {
-    if (message.role !== "user") return false;
-    const text = stripRecapNoise(message.text).trim();
-    return Boolean(text) && !isHandoffText(text);
-  });
+  const requests = messages
+    .filter((message) => {
+      if (message.role !== "user") return false;
+      const text = stripRecapNoise(message.text).trim();
+      return Boolean(text) && !isHandoffText(text);
+    })
+    .map((message) => ({
+      ...message,
+      text: stripRecapNoise(message.text).trim(),
+    }));
   if (requests.length <= max) return requests;
   if (max === 1) return [requests[requests.length - 1]];
 
@@ -277,25 +286,26 @@ export function buildRecapDigest(
   });
 
   const included: string[] = [];
-  let usedTokens = 0;
+  const header = `Multi-session digest for "${options.term}" (${selections.length} matching sessions, newest first).`;
+  let usedTokens = estimateTokens(header);
   let skipped = 0;
   let matches = 0;
 
   for (const [index, section] of sections.entries()) {
-    matches += section.selection.userHits + section.selection.assistantHits;
     if (index > 0 && usedTokens + section.tokens > options.tokenLimit) {
       skipped += 1;
       continue;
     }
     included.push(section.text);
+    matches += section.selection.userHits + section.selection.assistantHits;
     usedTokens += section.tokens;
   }
 
-  const header = `Multi-session digest for "${options.term}" (${included.length} of ${selections.length} matching sessions, newest first).`;
-  const text = included.length > 0 ? [header, ...included].join("\n\n") : "";
+  const finalHeader = `Multi-session digest for "${options.term}" (${included.length} of ${selections.length} matching sessions, newest first).`;
+  const text = included.length > 0 ? [finalHeader, ...included].join("\n\n") : "";
   const availableTokens =
     sections.reduce((total, section) => total + section.tokens, 0) +
-    estimateTokens(header);
+    estimateTokens(finalHeader);
 
   return {
     term: options.term,
@@ -306,6 +316,8 @@ export function buildRecapDigest(
     considered: selections.length,
     matches,
     skipped,
+    scanned: selections.length,
+    unreadable: 0,
   };
 }
 
@@ -314,7 +326,9 @@ export function formatRecapNotice(digest: RecapDigest): string {
   const matches = `${digest.matches} match${digest.matches === 1 ? "" : "es"}`;
   const tokens = `${formatTokenCount(digest.usedTokens)} tokens`;
   const skipped = digest.skipped > 0 ? ` · ${digest.skipped} over budget` : "";
-  return `recap ${digest.term}: ${sessions} · ${matches} · ${tokens}${skipped}`;
+  const unreadable =
+    digest.unreadable > 0 ? ` · ${digest.unreadable} unreadable` : "";
+  return `recap ${digest.term}: ${sessions} · ${matches} · ${tokens}${skipped}${unreadable}`;
 }
 
 export function isRecapCandidateSession(
@@ -332,8 +346,10 @@ export function isRecapCandidateSession(
     return false;
   }
 
-  if (options.scope === "project" && options.directory) {
-    return sameRecapDirectory(directory, options.directory);
+  if (options.scope === "project") {
+    return options.directory
+      ? sameRecapDirectory(directory, options.directory)
+      : false;
   }
 
   return true;
@@ -401,9 +417,7 @@ export async function collectRecapContext(options: {
   const minScore = config.recapMinScore;
   const maxSessions = config.recapSessions;
 
-  const sessions = (
-    await listRecapSessions(ctx, config.recapScanLimit)
-  )
+  const sessions = (await listRecapSessions(ctx, config.recapScanLimit, signal))
     .filter((session) =>
       isRecapCandidateSession(session, {
         scope,
@@ -415,6 +429,7 @@ export async function collectRecapContext(options: {
 
   const candidates: RecapCandidate[] = [];
   let scanned = 0;
+  let unreadable = 0;
   let stop = false;
   const total = sessions.length;
   const report = () =>
@@ -424,17 +439,20 @@ export async function collectRecapContext(options: {
   await mapWithConcurrency(sessions, RECAP_SCAN_CONCURRENCY, async (session) => {
     if (stop || signal?.aborted) return;
     scanned += 1;
-    const messages = toRecapMessages(
-      await exportRecapMessages(ctx, session.id),
-    );
+    const exported = await exportRecapMessages(ctx, session.id, signal);
     if (stop || signal?.aborted) return;
+    if (exported === undefined) {
+      unreadable += 1;
+      report();
+      return;
+    }
     const candidate: RecapCandidate = {
       id: session.id,
       title: session.title ?? "(untitled)",
       directory: session.location?.directory,
       createdAt: session.time?.created,
       updatedAt: session.time?.updated,
-      messages,
+      messages: toRecapMessages(exported),
     };
     if (scoreRecapCandidate(candidate, query).score >= minScore) {
       candidates.push(candidate);
@@ -455,11 +473,15 @@ export async function collectRecapContext(options: {
     maxSessions,
   });
 
-  return buildRecapDigest(selections, {
-    term: query.term,
-    tokenLimit: config.tokenLimit,
-    perSessionTokenLimit: DEFAULT_RECAP_SESSION_TOKENS,
-  });
+  return {
+    ...buildRecapDigest(selections, {
+      term: query.term,
+      tokenLimit: config.tokenLimit,
+      perSessionTokenLimit: DEFAULT_RECAP_SESSION_TOKENS,
+    }),
+    scanned,
+    unreadable,
+  };
 }
 
 function emptyRecapDigest(term: string): RecapDigest {
@@ -472,6 +494,8 @@ function emptyRecapDigest(term: string): RecapDigest {
     considered: 0,
     matches: 0,
     skipped: 0,
+    scanned: 0,
+    unreadable: 0,
   };
 }
 
@@ -562,20 +586,48 @@ function clampTokens(value: string, maxTokens: number): string {
     : value;
 }
 
+const RECAP_MAX_PAGES = 4;
+
 async function listRecapSessions(
   ctx: TuiContext,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<SessionInfo[]> {
-  try {
-    const result = await ctx.client.session.list({ limit, order: "desc" });
-    if (Array.isArray(result)) return result as SessionInfo[];
-    const data = (result as { data?: SessionInfo[] } | undefined)?.data;
-    if (Array.isArray(data)) return data;
-  } catch {}
+  const pageSize = Math.min(limit, 50);
+  const collected: SessionInfo[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < RECAP_MAX_PAGES; page += 1) {
+    if (signal?.aborted) break;
+    try {
+      const input = {
+        limit: pageSize,
+        order: "desc" as const,
+        parentID: null,
+        ...(cursor ? { cursor } : {}),
+      };
+      const result = signal
+        ? await ctx.client.session.list(input, { signal })
+        : await ctx.client.session.list(input);
+      if (Array.isArray(result)) {
+        collected.push(...(result as SessionInfo[]));
+        break;
+      }
+      const data = (result as { data?: SessionInfo[] } | undefined)?.data;
+      if (Array.isArray(data)) collected.push(...data);
+      cursor = (result as { cursor?: { next?: string | null } } | undefined)
+        ?.cursor?.next ?? undefined;
+      if (!cursor || collected.length >= limit) break;
+    } catch {
+      break;
+    }
+  }
+
+  if (collected.length > 0) return collected.slice(0, limit);
 
   try {
     const cached = ctx.data.session.list();
-    if (Array.isArray(cached)) return cached;
+    if (Array.isArray(cached)) return cached.slice(0, limit);
   } catch {}
 
   return [];
@@ -584,9 +636,12 @@ async function listRecapSessions(
 async function exportRecapMessages(
   ctx: TuiContext,
   sessionID: string,
-): Promise<readonly SessionMessageInfo[]> {
+  signal?: AbortSignal,
+): Promise<readonly SessionMessageInfo[] | undefined> {
   try {
-    const result = await ctx.client.session.export({ sessionID });
+    const result = signal
+      ? await ctx.client.session.export({ sessionID }, { signal })
+      : await ctx.client.session.export({ sessionID });
     const payload = result as
       | {
           messages?: SessionMessageInfo[];
@@ -595,14 +650,16 @@ async function exportRecapMessages(
       | undefined;
     const messages = payload?.messages ?? payload?.data?.messages;
     if (Array.isArray(messages)) return messages;
-  } catch {}
+  } catch {
+    return undefined;
+  }
 
   try {
     const cached = ctx.data.session.message.list(sessionID);
     if (Array.isArray(cached)) return cached;
   } catch {}
 
-  return [];
+  return undefined;
 }
 
 async function mapWithConcurrency<T>(

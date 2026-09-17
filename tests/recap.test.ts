@@ -310,6 +310,21 @@ describe("digest extraction", () => {
     );
   });
 
+  it("strips quoted noise from sampled milestones", () => {
+    const milestones = extractRecapMilestones(
+      [
+        {
+          role: "user",
+          text: '<subagent sessionID="ses_x">long report</subagent>\n\nupdate the README',
+        },
+      ],
+      3,
+    );
+    expect(milestones).toEqual([
+      { role: "user", text: "update the README", createdAt: undefined },
+    ]);
+  });
+
   it("extracts and dedupes facts", () => {
     const facts = extractRecapFacts(
       [
@@ -363,6 +378,18 @@ describe("buildRecapDigest", () => {
     expect(digest.text).toContain("- id: two");
     expect(formatRecapNotice(digest)).toContain("2 sessions");
     expect(formatRecapNotice(digest)).toContain("4 matches");
+  });
+
+  it("reports unreadable sessions in the notice", () => {
+    const digest = buildRecapDigest([selection("one", 9)], {
+      term: "mini",
+      tokenLimit: 50_000,
+      perSessionTokenLimit: 1200,
+    });
+
+    expect(formatRecapNotice({ ...digest, scanned: 3, unreadable: 2 })).toContain(
+      "2 unreadable",
+    );
   });
 
   it("drops sessions over the token budget", () => {
@@ -422,6 +449,15 @@ describe("session filtering", () => {
         ...options,
         scope: "all",
       }),
+    ).toBe(true);
+  });
+
+  it("fails closed for project scope without a directory", () => {
+    expect(
+      isRecapCandidateSession(sessionInfo(), { scope: "project", excludeDirs: [] }),
+    ).toBe(false);
+    expect(
+      isRecapCandidateSession(sessionInfo(), { scope: "all", excludeDirs: [] }),
     ).toBe(true);
   });
 
@@ -490,13 +526,40 @@ describe("collectRecapContext", () => {
       directory: "/tmp/project",
     });
 
-    expect(ctx.client.session.list).toHaveBeenCalledWith({ limit: 50, order: "desc" });
+    expect(ctx.client.session.list).toHaveBeenCalledWith({
+      limit: 50,
+      order: "desc",
+      parentID: null,
+    });
     expect(ctx.client.session.export).toHaveBeenCalledTimes(2);
     expect(digest.included).toBe(2);
     expect(digest.considered).toBe(2);
+    expect(digest.scanned).toBe(2);
+    expect(digest.unreadable).toBe(0);
     expect(digest.matches).toBeGreaterThan(0);
     expect(digest.text).toContain("ses_title");
     expect(digest.text).toContain("ses_body");
+  });
+
+  it("counts sessions it could not read", async () => {
+    const ctx = fakeCtx([sessionInfo({ id: "ses_bad", title: "mini session" })], {});
+    ctx.client.session.export = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    ctx.data.session.message.list = () => {
+      throw new Error("no cache");
+    };
+
+    const digest = await collectRecapContext({
+      ctx,
+      config: config(),
+      query: { term: "mini session", excludes: [] },
+      directory: "/tmp/project",
+    });
+
+    expect(digest.scanned).toBe(1);
+    expect(digest.unreadable).toBe(1);
+    expect(digest.included).toBe(0);
   });
 
   it("returns an empty digest when the scan is aborted", async () => {
