@@ -3,9 +3,10 @@ import { createEffect, createSignal, untrack } from "solid-js";
 import { cleanupStaleMiniSessions } from "./cleanup";
 import { createOverlaySlot } from "./components/AnswerDialog";
 import { parseConfig } from "./config";
-import { PLUGIN_ID } from "./constants";
+import { PLUGIN_ID, RECAP_PROMPT } from "./constants";
 import type { MiniKeybindActions } from "./keybinds";
 import { getCurrentRoute } from "./opencode";
+import { fallbackRecapTerm, parseRecapQuery } from "./recap";
 import { resolveMiniRouteAction, runMiniRouteAction } from "./routing";
 import { openMiniSession, openModelPicker } from "./session";
 import type {
@@ -14,6 +15,7 @@ import type {
   ModelPreference,
   ModelPreferenceState,
   OverlayState,
+  RecapQuery,
   ResolvedModel,
   ThinkingPreferenceState,
 } from "./types";
@@ -82,8 +84,17 @@ export default Plugin.define({
     const actions: MiniKeybindActions = {
       config,
       onSession: () => getCurrentRoute(ctx).kind === "session",
-      triggerMiniMode: (mode, source, initialQuestion, handoff) => {
-        void triggerMiniMode(mode, source, initialQuestion, handoff);
+      triggerMiniMode: (mode, source, initialQuestion, handoff, recap) => {
+        void triggerMiniMode(mode, source, initialQuestion, handoff, recap);
+      },
+      triggerRecap: (input) => {
+        const route = getCurrentRoute(ctx);
+        if (route.kind !== "session") return;
+        const query = parseRecapQuery(
+          input,
+          fallbackRecapTerm(ctx.location?.directory),
+        );
+        void triggerMiniMode("recap", "command", RECAP_PROMPT, false, query);
       },
       openModelPicker: () => {
         const route = getCurrentRoute(ctx);
@@ -158,6 +169,7 @@ export default Plugin.define({
       source: "command" | "keybind",
       initialQuestion?: string,
       handoff?: boolean,
+      recap?: RecapQuery,
     ) {
       const route = getCurrentRoute(ctx);
       if (route.kind !== "session") return;
@@ -167,7 +179,7 @@ export default Plugin.define({
         requestedMode: mode,
         activeMode,
         isVisible: activeDialog?.isVisible(),
-        forceReopen: handoff === true,
+        forceReopen: handoff === true || recap !== undefined,
       });
 
       await runMiniRouteAction({
@@ -197,6 +209,7 @@ export default Plugin.define({
             getUpdateWarning: () => updateWarning(),
             initialQuestion,
             handoff,
+            recap,
             isDisposed: () => disposed,
           });
           if (opened) {
