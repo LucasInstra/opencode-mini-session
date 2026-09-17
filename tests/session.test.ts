@@ -1430,7 +1430,14 @@ describe("recap mode", () => {
       }),
     );
 
-    expect(sessionList).toHaveBeenCalledWith({ limit: 50, order: "desc" });
+    expect(sessionList).toHaveBeenCalledWith(
+      {
+        limit: 50,
+        order: "desc",
+        parentID: null,
+      },
+      { signal: expect.anything() },
+    );
     expect(ctx.client.session.create).not.toHaveBeenCalled();
     expect(ctx.ui.toast.show).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1477,9 +1484,12 @@ describe("recap mode", () => {
       }),
     );
 
-    expect(ctx.client.session.export).toHaveBeenCalledWith({
-      sessionID: "ses_recap",
-    });
+    expect(ctx.client.session.export).toHaveBeenCalledWith(
+      {
+        sessionID: "ses_recap",
+      },
+      { signal: expect.anything() },
+    );
     expect(ctx.client.session.create).toHaveBeenCalled();
     expect(ctx.client.session.prompt).toHaveBeenCalledWith({
       sessionID: "mini-session",
@@ -1540,5 +1550,77 @@ describe("recap mode", () => {
 
     agentResolution.resolve(resolvedAgent());
     await opening;
+  });
+
+  it("warns when scanned sessions do not mention the term", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const session = {
+      id: "ses_other",
+      title: "unrelated session",
+      time: { created: 1, updated: 2 },
+      location: { directory: "/tmp/project" },
+    };
+    (ctx.client.session as any).list = vi.fn(async () => ({
+      data: [session],
+      cursor: {},
+    }));
+    (ctx.client.session as any).export = vi.fn(async () => ({
+      info: session,
+      messages: [
+        {
+          id: "m1",
+          type: "user",
+          text: "nothing relevant here",
+          time: { created: 1 },
+        },
+      ],
+    }));
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        mode: "recap",
+        recap: { term: "mini session", excludes: [] },
+        initialQuestion: "RECAP",
+      }),
+    );
+
+    expect(ctx.client.session.create).not.toHaveBeenCalled();
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: "warning",
+        message: 'No sessions mention "mini session".',
+      }),
+    );
+  });
+
+  it("asks for a term when the recap query is empty", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const sessionList = vi.fn(async () => ({ data: [], cursor: {} }));
+    (ctx.client.session as any).list = sessionList;
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        mode: "recap",
+        recap: { term: "  ", excludes: [] },
+        initialQuestion: "RECAP",
+      }),
+    );
+
+    expect(sessionList).not.toHaveBeenCalled();
+    expect(ctx.client.session.create).not.toHaveBeenCalled();
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: "error",
+        message: expect.stringContaining("Give /mini-recap a term"),
+      }),
+    );
   });
 });

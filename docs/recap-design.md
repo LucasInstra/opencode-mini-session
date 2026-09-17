@@ -1,7 +1,7 @@
 # `/mini-recap` — design notes
 
-> Status: **draft, not implemented.** This branch (`v2-recap`) is stacked on `v2-features`
-> (the feature PR #26); the recap PR lands after the V2 port (#25) and the features (#26).
+> Status: **implemented (v1)** on this branch, which is stacked on `v2-features` (the feature
+> PR #26); the recap PR lands after the V2 port (#25) and the features (#26).
 >
 > The numbers below come from a real dry run on a live database (108 sessions): the term
 > `mini-session` matched 5 root sessions, of which only 2 were actually about the project —
@@ -215,3 +215,15 @@ numbers are never model-generated.
   messages after the last compaction, while `session.export` returns everything.
 - Upstream bug to report: `GET /api/session?search=` is accepted but ignored. If fixed, the
   content pass can go away and the feature becomes cheaper and more precise.
+
+## Implementation notes (v1)
+
+Implemented: `/mini-recap [term] [--all] [--exclude <term>]`, the two-pass scan (title pass,
+then a bounded content pass with `parentID: null` and cursor paging), the scoring model, the
+digest with per-session and global budgets, the recap mode in the mini overlay with `esc`
+cancellation (the scan signal is forwarded to the client fetches), unreadable-session
+counters, README documentation and unit tests.
+
+Not implemented yet, kept here as future work: the `--since`, `--yes`, `--refresh` and
+`--handoff` flags, the selection picker, compaction summaries as the primary source, and
+server-side search (still ignored by the server).

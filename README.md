@@ -200,7 +200,7 @@ Fresh mini mode skips this copied-context step entirely.
 
 `/mini-recap` answers "what happened in this project?" by scanning past sessions that mention a term and writing a consolidated recap: objective, timeline, decisions, current state, open questions and next steps, with the sessions used listed at the end.
 
-- `/mini-recap mini session` scans the versions of the term (case- and accent-insensitive) in the current project by default; add `--all` to scan every project, or `--exclude popup` to drop sessions that mention something else.
+- `/mini-recap mini session` scans for the term (case- and accent-insensitive, `-` and `_` count as spaces) in the current project by default; add `--all` to scan every project, or `--exclude popup` to drop sessions whose title mentions something else.
 - Without a term it uses the current directory name.
 - Sessions are ranked before anything is generated: a title match scores highest, then mentions in user messages, then assistant mentions; quoted pastes (handoffs, subagent reports, code blocks) do not count. Only sessions above `recapMinScore` are included, newest first, up to `recapSessions`.
 - The digest is bounded by `tokenLimit`: each session contributes its objective, up to eight sampled requests with dates, extracted facts (commits, PRs, versions, paths, URLs) and the final reported state. The overlay shows how many sessions, matches and tokens made it in.

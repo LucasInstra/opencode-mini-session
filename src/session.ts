@@ -633,6 +633,15 @@ export async function startQuestion(options: MiniSessionOptions) {
       term: fallbackRecapTerm(ctx.location?.directory),
       excludes: [],
     };
+    if (!query.term.trim()) {
+      ctx.ui.toast.show({
+        variant: "error",
+        message:
+          'Give /mini-recap a term, for example "/mini-recap mini session".',
+      });
+      await cleanup();
+      return;
+    }
     dialogState.notice = `Scanning sessions for "${query.term}"...`;
     renderOverlay();
     const digest = await collectRecapContext({
@@ -652,17 +661,17 @@ export async function startQuestion(options: MiniSessionOptions) {
       ctx.ui.toast.show({
         variant: "warning",
         message:
-          digest.considered === 0
-            ? `No sessions found for "${digest.term}".`
-            : `No sessions mention "${digest.term}".`,
+          digest.unreadable > 0 && digest.scanned === digest.unreadable
+            ? `Could not read the sessions matching "${digest.term}".`
+            : digest.scanned === 0
+              ? `No sessions found for "${digest.term}".`
+              : `No sessions mention "${digest.term}".`,
       });
       await cleanup();
       return;
     }
     context = digest.text;
     recapNotice = formatRecapNotice(digest);
-    dialogState.copiedContextTokens = digest.usedTokens;
-    dialogState.copiedContextTotalTokens = digest.availableTokens;
     renderOverlay();
   }
 
