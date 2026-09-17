@@ -19,6 +19,12 @@ function config(): MiniConfig {
     toggleThinkingKeybind: "ctrl+t",
     tools: ["read"],
     continueKeybind: "ctrl+y",
+    recapKeybind: false,
+    recapScope: "project",
+    recapSessions: 15,
+    recapScanLimit: 50,
+    recapMinScore: 4,
+    recapExcludeDirs: [],
   };
 }
 
@@ -29,6 +35,7 @@ function actions(
     config: config(),
     onSession: () => true,
     triggerMiniMode,
+    triggerRecap: vi.fn(),
     openModelPicker: vi.fn(),
     hideOverlay: vi.fn(),
     closeOverlay: vi.fn(),
@@ -140,5 +147,36 @@ describe("panel keymap commands", () => {
     expect(
       disabled.some((command) => command.id === "mini.toggle-continue"),
     ).toBe(false);
+  });
+
+  it("wires the recap command", () => {
+    const recapCalls: Array<string | undefined> = [];
+    const commands = buildGlobalCommands({
+      ...actions(),
+      triggerRecap: (input) => recapCalls.push(input),
+    });
+
+    const command = commands.find((entry) => entry.id === "mini.recap.command");
+    expect(command?.slash).toEqual({ name: "mini-recap", arguments: true });
+    command?.run?.("/mini-recap mini session");
+    expect(recapCalls).toEqual(["/mini-recap mini session"]);
+
+    expect(
+      commands.find((entry) => entry.id === "mini.recap.keybind"),
+    ).toBeUndefined();
+  });
+
+  it("registers the recap keybind when configured", () => {
+    const recapCalls: Array<string | undefined> = [];
+    const commands = buildGlobalCommands({
+      ...actions(),
+      config: { ...config(), recapKeybind: "alt+r" },
+      triggerRecap: (input) => recapCalls.push(input),
+    });
+
+    const keybind = commands.find((entry) => entry.id === "mini.recap.keybind");
+    expect(keybind?.bind).toBe("alt+r");
+    keybind?.run?.();
+    expect(recapCalls).toEqual([undefined]);
   });
 });

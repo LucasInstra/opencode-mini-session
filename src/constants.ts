@@ -17,6 +17,7 @@ export const CMD_PAGE_DOWN = "mini.page-down";
 export const CMD_SCROLL_TOP = "mini.scroll-top";
 export const CMD_SCROLL_BOTTOM = "mini.scroll-bottom";
 export const CMD_HANDOFF = "mini.handoff";
+export const CMD_RECAP = "mini.recap";
 
 export const SCROLL_LINE_DELTA = 4;
 export const SCROLL_PAGE_DELTA = 14;
@@ -26,6 +27,9 @@ export const DEFAULT_KEYBIND = "alt+b";
 export const DEFAULT_FRESH_KEYBIND = "alt+n";
 export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
 export const DEFAULT_CONTINUE_KEYBIND = "ctrl+y";
+export const DEFAULT_RECAP_SESSIONS = 15;
+export const DEFAULT_RECAP_SCAN_LIMIT = 50;
+export const DEFAULT_RECAP_MIN_SCORE = 4;
 
 /**
  * Permission actions the mini agent may be granted. The list is deliberately
@@ -53,6 +57,14 @@ export const MINI_SESSION_METADATA_KEY = "opencodeMiniSession";
 
 /** Short user-facing question for `/mini-handoff`; the full prompt is internal. */
 export const HANDOFF_QUESTION = "Generate a handoff";
+
+/**
+ * Instructions for `/mini-recap`: turns the digest of past sessions into a
+ * consolidated project recap. Sent as a system instruction so the overlay does
+ * not display it as the user's message.
+ */
+export const RECAP_PROMPT =
+  "You are writing a consolidated recap of a project from several past assistant sessions. The digest of those sessions is provided above: each section has the session title, id, period, directory, the objective, sampled requests with dates, extracted facts (commits, PRs, versions, paths, URLs) and the final reported state. Write the recap from the digest only; do not investigate the workspace and do not call tools. If the digest is empty or insufficient, say so briefly instead of guessing. Produce a concise markdown document with these sections: Objetivo, Linha do tempo, Decisões, Estado atual, Pendências / questões em aberto, Próximos passos, Fontes (list the sessions used, with id and date). Do not invent details; cite the session and date next to claims when you can; if two sessions disagree, say so explicitly. Reply with the recap document only, in the same language as the session content (the digest labels may be in English); do not add an introduction or a closing comment.";
 
 /**
  * Instructions for `/mini-handoff`: turns the copied session context into a

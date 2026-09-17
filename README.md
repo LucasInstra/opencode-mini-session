@@ -14,6 +14,7 @@ https://github.com/user-attachments/assets/7a668d45-dffc-4311-91fb-1460bf773238
 - **Side questions without blocking the main thread** — `alt+b` or `/mini [question]`
 - **Fresh threads with no copied context** — `alt+n` or `/mini-fresh [question]`
 - **Session handoff** — `/mini-handoff [instructions]` writes a document for a new session and copies it to the clipboard
+- **Project recap** — `/mini-recap [term]` summarises every past session that mentions a project: timeline, decisions, state, open questions and next steps
 - **Streaming answers** with thinking blocks, a model picker, and context/token counters
 - **Read-only by default** — the plugin-managed mini agent only gets `read`, `glob`, `grep`, `webfetch` and `websearch`
 - **Continue your way** — queue the answer into the main session, or copy it to the clipboard (OSC 52)
@@ -74,6 +75,7 @@ For V1 configuration and troubleshooting, use the [v1 README](https://github.com
 | `/mini [question]` | Open mini session with copied session context, optionally asking immediately |
 | `/mini-fresh [question]` | Open mini session with no copied session context, optionally asking immediately |
 | `/mini-handoff [instructions]` | Write a handoff document from this session (the overlay's **Copy handoff** action copies it) |
+| `/mini-recap [term]` | Write a recap of past sessions that mention a term (`--all`, `--exclude <term>`) |
 | `/mini-model` | Change model for future mini sessions |
 
 ### Inside the mini session
@@ -106,8 +108,14 @@ All options are optional. Defaults are shown below.
 | `toggleThinkingKeybind` | `string \| false` | `"ctrl+t"` | Thinking toggle keybind inside the mini session. Set to `false` or `"none"` to disable. |
 | `tools` | `string[]` | `["read","glob","grep","webfetch","websearch"]` | Read-only permission actions available to the plugin-managed mini agent. Supported: `read`, `glob`, `grep`, `webfetch`, `websearch`. Unknown or write-capable actions are ignored. An explicit empty list (or one that filters down to nothing) disables all tools. |
 | `continueKeybind` | `string \| false` | `"ctrl+y"` | Toggle between queueing the transcript in the main session and copying it to the clipboard (OSC 52) while the overlay is open. Set to `false` or `"none"` to disable. |
+| `recapKeybind` | `string \| false` | `false` | Optional keybind for `/mini-recap`. Set to a chord like `"alt+r"` to enable it. |
+| `recapScope` | `"project" \| "all"` | `"project"` | Which sessions `/mini-recap` scans: only the current directory, or every project. `--all` overrides it per run. |
+| `recapSessions` | `number` | `15` | Maximum sessions included in the recap digest. |
+| `recapScanLimit` | `number` | `50` | How many of the most recent root sessions are scanned for the term. |
+| `recapMinScore` | `number` | `4` | Minimum relevance score (title match 5, user messages 2 each, assistant mentions 1 each). |
+| `recapExcludeDirs` | `string[]` | `[]` | Glob patterns of directories to keep out of recaps, for example `["**/private/**"]`. |
 
-The model chosen with `/mini-model`, the thinking toggle and the continue mode are remembered between restarts (per plugin storage). The handoff mode always uses **Copy handoff**; the toggle only applies to regular mini sessions.
+The model chosen with `/mini-model`, the thinking toggle and the continue mode are remembered between restarts (per plugin storage). Handoff and recap modes always use **Copy handoff** / **Copy recap**; the toggle only applies to regular mini sessions.
 
 If you want to customize the plugin, your config should look something like this:
 
@@ -126,6 +134,9 @@ If you want to customize the plugin, your config should look something like this
         "toggleThinkingKeybind": "alt+a",
         "tools": ["read", "glob", "grep", "webfetch", "websearch"],
         "continueKeybind": "ctrl+y",
+        "recapKeybind": "alt+r",
+        "recapScope": "project",
+        "recapSessions": 15,
         "agent": "build"
       }
     }
@@ -176,6 +187,17 @@ Fresh mini mode skips this copied-context step entirely.
 - The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52). Handoff mode ignores the continue-mode toggle.
 - Clipboard support is required for this mode: if the terminal cannot copy (no OSC 52), the overlay stays open and reports it instead of losing the text.
 - Refine the document with follow-up questions in the same overlay, then copy the final version.
+
+## Project recap
+
+`/mini-recap` answers "what happened in this project?" by scanning past sessions that mention a term and writing a consolidated recap: objective, timeline, decisions, current state, open questions and next steps, with the sessions used listed at the end.
+
+- `/mini-recap mini session` scans the versions of the term (case- and accent-insensitive) in the current project by default; add `--all` to scan every project, or `--exclude popup` to drop sessions that mention something else.
+- Without a term it uses the current directory name.
+- Sessions are ranked before anything is generated: a title match scores highest, then mentions in user messages, then assistant mentions; quoted pastes (handoffs, subagent reports, code blocks) do not count. Only sessions above `recapMinScore` are included, newest first, up to `recapSessions`.
+- The digest is bounded by `tokenLimit`: each session contributes its objective, up to eight sampled requests with dates, extracted facts (commits, PRs, versions, paths, URLs) and the final reported state. The overlay shows how many sessions, matches and tokens made it in.
+- The button reads **Copy recap** and copies only the recap document (or `enter` with the input empty, on terminals without `shift+enter`). Follow-up questions keep working in the same overlay without rescanning.
+- `esc` cancels the scan. Subagent sessions and mini sessions are always skipped.
 
 ## Troubleshooting
 
