@@ -4,21 +4,25 @@ import {
   type ScrollBoxRenderable,
   SyntaxStyle,
 } from "@opentui/core";
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
-import type { Part } from "@opencode-ai/sdk/v2";
-import { createMemo, Show } from "solid-js";
-import { THINKING_TEXT } from "../constants";
+import { createMemo, Index, Show } from "solid-js";
+import {
+  buildGlobalCommands,
+  buildPanelCommands,
+  registerGlobalKeymap,
+  registerPanelKeymap,
+  type MiniKeybindActions,
+} from "../keybinds";
+import { adaptTheme, type MiniTheme, type TuiContext } from "../opencode";
 import type {
   AnswerDialogProps,
   AnswerDialogState,
   OverlayState,
+  SessionPart,
 } from "../types";
 import { extractAssistantText } from "../session";
 import { ActionButton } from "./ActionButton";
 
-function buildSyntaxStyle(
-  theme: TuiPluginApi["theme"]["current"],
-): SyntaxStyle {
+function buildSyntaxStyle(theme: MiniTheme): SyntaxStyle {
   return SyntaxStyle.fromStyles({
     // Markdown token styles
     "markup.heading": { fg: theme.markdownHeading, bold: true },
@@ -51,8 +55,7 @@ type MiniPart =
       type: "reasoning";
       id: string;
       text: string;
-      time?: { start?: number; end?: number };
-      metadata?: unknown;
+      time?: { created?: number; completed?: number };
     }
   | { type: "tool"; text: string; status: string }
   | { type: "meta"; text: string };
@@ -62,6 +65,7 @@ type MiniMessage = {
   role: "user" | "assistant";
   parts: MiniPart[];
   modelName?: string;
+  streaming: boolean;
 };
 
 const THINKING_SPINNER_FRAMES = [
@@ -78,7 +82,7 @@ const THINKING_SPINNER_FRAMES = [
 ];
 
 export function AnswerDialog(props: AnswerDialogProps) {
-  const theme = props.api.theme.current;
+  const theme = adaptTheme(props.api.theme);
   const mdSyntaxStyle = buildSyntaxStyle(theme);
   let scroller: ScrollBoxRenderable | undefined;
   let input: InputRenderable | undefined;
@@ -115,10 +119,7 @@ export function AnswerDialog(props: AnswerDialogProps) {
     () =>
       !props.state.loading &&
       !props.state.error &&
-      Boolean(
-        extractAssistantText(props.state.entries) ||
-        props.state.streamingAnswer.trim(),
-      ),
+      Boolean(extractAssistantText(props.state.entries)),
   );
   const createUserMessageHint = createMemo(() =>
     getCreateUserMessageHint(props.state),
@@ -204,65 +205,81 @@ export function AnswerDialog(props: AnswerDialogProps) {
               {props.state.update ? (
                 <text fg={theme.warning}>{props.state.update}</text>
               ) : null}
+              {/* Keep Markdown renderers mounted when refreshes replace messages. */}
               {messages().length > 0 ? (
-                messages().map((message) => (
-                  <box flexDirection="column" gap={0}>
-                    <text
-                      fg={
-                        message.role === "assistant"
-                          ? theme.primary
-                          : theme.secondary
-                      }
-                    >
-                      <b>
-                        {message.role === "assistant"
-                          ? `assistant [${message.modelName ?? props.modelName}]`
-                          : message.role}
-                      </b>
-                    </text>
-                    {message.parts.map((part, index) => (
-                      <box
-                        marginTop={getMiniPartTopMargin(
-                          message.parts,
-                          index,
-                          message.role,
-                        )}
+                <Index each={messages()}>
+                  {(message) => (
+                    <box flexDirection="column" gap={0}>
+                      <text
+                        fg={
+                          message().role === "assistant"
+                            ? theme.primary
+                            : theme.secondary
+                        }
                       >
-                        {part.type === "reasoning" ? (
-                          <ThinkingPart
-                            api={props.api}
-                            part={part}
-                            expanded={isThinkingPartExpanded(
-                              props.state,
-                              part,
+                        <b>
+                          {message().role === "assistant"
+                            ? `assistant [${message().modelName ?? props.modelName}]`
+                            : message().role}
+                        </b>
+                      </text>
+                      <Index each={message().parts}>
+                        {(part, index) => (
+                          <box
+                            marginTop={getMiniPartTopMargin(
+                              message().parts,
+                              index,
+                              message().role,
                             )}
-                            spinnerFrame={props.state.spinnerFrame}
-                            onToggle={() => props.onToggleThinkingPart(part.id)}
-                          />
-                        ) : message.role === "assistant" &&
-                        part.type === "text" &&
-                        !props.state.loading ? (
-                          <markdown
-                            content={part.text}
-                            syntaxStyle={mdSyntaxStyle}
-                            fg={theme.markdownText}
-                            streaming={props.state.loading}
-                            width={transcriptContentWidth}
-                          />
-                        ) : (
-                          <text fg={getMiniPartColor(theme, part)}>
-                            {formatMiniPart(part)}
-                          </text>
+                          >
+                            {part().type === "reasoning" ? (
+                              <ThinkingPart
+                                theme={theme}
+                                part={part() as ThinkingMiniPart}
+                                expanded={isThinkingPartExpanded(
+                                  props.state,
+                                  part() as ThinkingMiniPart,
+                                )}
+                                spinnerFrame={props.state.spinnerFrame}
+                                onToggle={() => props.onToggleThinkingPart(
+                                  (part() as ThinkingMiniPart).id,
+                                )}
+                              />
+                            ) : message().role === "assistant" &&
+                            part().type === "text" ? (
+                              <markdown
+                                content={part().text}
+                                syntaxStyle={mdSyntaxStyle}
+                                fg={theme.markdownText}
+                                streaming={message().streaming}
+                                width={transcriptContentWidth}
+                              />
+                            ) : (
+                              <text fg={getMiniPartColor(theme, part())}>
+                                {formatMiniPart(part())}
+                              </text>
+                            )}
+                          </box>
                         )}
-                      </box>
-                    ))}
-                  </box>
-                ))
-              ) : props.state.loading ? (
-                <text fg={theme.textMuted}>{THINKING_TEXT}</text>
-              ) : (
+                      </Index>
+                    </box>
+                  )}
+                </Index>
+              ) : !props.state.loading ? (
                 <text fg={theme.textMuted}>Ask a side question below.</text>
-              )}
+              ) : null}
+              <Show when={props.state.loading && props.state.waitingForResponse}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary}>
+                    <b>{`assistant [${props.modelName}]`}</b>
+                  </text>
+                  <box marginTop={1}>
+                    <text fg={theme.textMuted}>
+                      {THINKING_SPINNER_FRAMES[props.state.spinnerFrame]}
+                    </text>
+                  </box>
+                </box>
+              </Show>
               {props.state.error ? (
                 <text fg={theme.error}>Error: {props.state.error}</text>
               ) : null}
@@ -271,9 +288,6 @@ export function AnswerDialog(props: AnswerDialogProps) {
               ) : null}
               {createUserMessageHint() ? (
                 <text fg={theme.warning}>{createUserMessageHint()}</text>
-              ) : null}
-              {props.state.loading && messages().length > 0 ? (
-                <text fg={theme.textMuted}>{THINKING_TEXT}</text>
               ) : null}
             </box>
           </scrollbox>
@@ -335,7 +349,7 @@ export function AnswerDialog(props: AnswerDialogProps) {
             >
               <text fg={theme.text}>{footerModelName()}</text>
               <Show when={hasFooterCounter()}>
-                <FooterCounter api={props.api} state={footerCounter()} />
+                <FooterCounter theme={theme} state={footerCounter()} />
               </Show>
             </box>
           </box>
@@ -385,14 +399,18 @@ function buildMiniMessages(state: AnswerDialogState): MiniMessage[] {
   for (const entry of state.entries) {
     const message: MiniMessage = {
       id: entry.info.id,
-      role: entry.info.role,
+      role: entry.info.type === "assistant" ? "assistant" : "user",
       parts: entry.parts
         .flatMap(toMiniParts)
         .filter((part): part is MiniPart => Boolean(part)),
       modelName:
-        entry.info.role === "assistant"
+        entry.info.type === "assistant"
           ? state.messageModels[entry.info.id]
           : undefined,
+      streaming:
+        entry.info.type === "assistant" &&
+        state.loading &&
+        entry.info.time.completed === undefined,
     };
 
     if (message.parts.length === 0) continue;
@@ -401,62 +419,11 @@ function buildMiniMessages(state: AnswerDialogState): MiniMessage[] {
     if (shouldMergeMiniMessages(previous, message)) {
       previous.parts.push(...message.parts);
       previous.modelName ??= message.modelName;
+      previous.streaming ||= message.streaming;
       continue;
     }
 
     messages.push(message);
-  }
-
-  if (!state.streamingAnswer) return messages;
-
-  const lastAssistant = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant");
-
-  if (!lastAssistant) {
-    messages.push({
-      id: "streaming-assistant",
-      role: "assistant",
-      parts: [{ type: "text", text: state.streamingAnswer }],
-      modelName: undefined,
-    });
-    return messages;
-  }
-
-  const lastText = [...lastAssistant.parts]
-    .reverse()
-    .find(
-      (part): part is Extract<MiniPart, { type: "text" }> =>
-        part.type === "text",
-    );
-
-  if (lastText) {
-    const streamingTrimmed = state.streamingAnswer.trim();
-    const lastTextTrimmed = lastText.text.trim();
-
-    if (streamingTrimmed === lastTextTrimmed) {
-      // Identical content, no change needed
-    } else if (
-      streamingTrimmed.startsWith(lastTextTrimmed) &&
-      streamingTrimmed.length > lastTextTrimmed.length
-    ) {
-      // streamingAnswer contains existing text plus more (cumulative delta)
-      lastText.text = state.streamingAnswer;
-    } else if (!lastTextTrimmed.endsWith(streamingTrimmed)) {
-      // streamingAnswer is genuinely new text (incremental delta)
-      lastText.text += state.streamingAnswer;
-    }
-  } else {
-    const lastReasoning = [...lastAssistant.parts]
-      .reverse()
-      .find((part) => part.type === "reasoning");
-
-    if (
-      !lastReasoning ||
-      lastReasoning.text.trim() !== state.streamingAnswer.trim()
-    ) {
-      lastAssistant.parts.push({ type: "text", text: state.streamingAnswer });
-    }
   }
 
   return messages;
@@ -474,13 +441,12 @@ function shouldMergeMiniMessages(
 type ThinkingMiniPart = Extract<MiniPart, { type: "reasoning" }>;
 
 function ThinkingPart(props: {
-  api: TuiPluginApi;
+  theme: MiniTheme;
   part: ThinkingMiniPart;
   expanded: boolean;
   spinnerFrame: number;
   onToggle: () => void;
 }) {
-  const theme = props.api.theme.current;
   const header = () =>
     formatThinkingHeader(props.part, props.expanded, props);
   const body = () => getThinkingBodyText(props.part);
@@ -488,7 +454,7 @@ function ThinkingPart(props: {
   return (
     <box flexDirection="column" gap={0} opacity={props.expanded ? 0.65 : 1}>
       <box onMouseUp={props.onToggle}>
-        <text fg={theme.warning}>
+        <text fg={props.theme.warning}>
           <Show when={!props.expanded} fallback={header()}>
             <b>{header()}</b>
           </Show>
@@ -496,7 +462,7 @@ function ThinkingPart(props: {
       </box>
       <Show when={props.expanded && body()}>
         <box marginLeft={2} marginTop={1}>
-          <text fg={theme.markdownBlockQuote}>{body()}</text>
+          <text fg={props.theme.markdownBlockQuote}>{body()}</text>
         </box>
       </Show>
     </box>
@@ -538,8 +504,8 @@ function estimateMiniMessagesHeight(
   if (hint) lines += estimateWrappedLines(hint, width);
   if (state.notice)
     lines += estimateWrappedLines(`Warning: ${state.notice}`, width);
-  if (state.loading && messages.length > 0) lines += 1;
-  if (messages.length === 0) lines += 1;
+  if (messages.length === 0 && !state.loading) lines += 1;
+  if (state.loading && state.waitingForResponse) lines += 3;
   return lines;
 }
 
@@ -558,7 +524,8 @@ function getMiniPartTopMargin(
   index: number,
   role: MiniMessage["role"],
 ) {
-  if (index === 0) return parts[0]?.type === "reasoning" && role === "assistant" ? 1 : 0;
+  if (index === 0)
+    return parts[0]?.type === "reasoning" && role === "assistant" ? 1 : 0;
   const previous = parts[index - 1];
   const current = parts[index];
   if (current.type === "reasoning") {
@@ -570,7 +537,7 @@ function getMiniPartTopMargin(
   return current.type === "text" && previous.type !== "text" ? 1 : 0;
 }
 
-function toMiniParts(part: Part): MiniPart[] {
+function toMiniParts(part: SessionPart): MiniPart[] {
   if (part.type === "reasoning" && part.text.trim())
     return toReasoningMiniParts(part);
 
@@ -578,46 +545,40 @@ function toMiniParts(part: Part): MiniPart[] {
   return miniPart ? [miniPart] : [];
 }
 
-function toMiniPart(part: Part): MiniPart | undefined {
+function toMiniPart(part: SessionPart): MiniPart | undefined {
   if (part.type === "text" && part.text.trim())
     return { type: "text", text: part.text.trim() };
+  if (part.type === "reasoning")
+    return {
+      type: "reasoning",
+      id: part.id,
+      text: part.text,
+      time: part.time,
+    };
   if (part.type === "tool") {
-    const toolName = part.tool.charAt(0).toUpperCase() + part.tool.slice(1);
-    const inputSummary = summarizeToolInput(part.state.input);
-    const stateTitle =
-      "title" in part.state && typeof part.state.title === "string"
-        ? part.state.title
-        : undefined;
-    const detail = inputSummary || stateTitle;
+    const toolName = part.name.charAt(0).toUpperCase() + part.name.slice(1);
+    const inputSummary = summarizeToolInput(part.input);
+    const detail = inputSummary || part.title;
     return {
       type: "tool",
-      status: part.state.status,
+      status: part.status,
       text: detail ? `→ ${toolName} ${detail}` : `→ ${toolName}`,
     };
   }
-  if (part.type === "file")
-    return { type: "meta", text: `file: ${part.filename ?? part.url}` };
-  if (part.type === "agent")
-    return { type: "meta", text: `agent: ${part.name}` };
-  if (part.type === "patch")
-    return { type: "meta", text: `patch: ${part.files.join(", ")}` };
-  if (part.type === "retry")
-    return { type: "meta", text: `retry ${part.attempt}` };
   return undefined;
 }
 
-function toReasoningMiniParts(part: Extract<Part, { type: "reasoning" }>) {
-  const baseID = getReasoningPartID(part);
-  const time = "time" in part && isReasoningTime(part.time) ? part.time : undefined;
-  const metadata = "metadata" in part ? part.metadata : undefined;
+function toReasoningMiniParts(
+  part: Extract<SessionPart, { type: "reasoning" }>,
+) {
+  const baseID = part.id;
   const segments = splitReasoningText(part.text.trim());
 
   return segments.map((text, index) => ({
     type: "reasoning" as const,
     id: segments.length === 1 ? baseID : `${baseID}:${index}`,
     text,
-    time: index === 0 ? time : undefined,
-    metadata,
+    time: index === 0 ? part.time : undefined,
   }));
 }
 
@@ -672,28 +633,36 @@ function formatMiniPart(part: MiniPart) {
 }
 
 function FooterCounter(props: {
-  api: TuiPluginApi;
+  theme: MiniTheme;
   state: AnswerDialogState["footerCounter"];
 }) {
-  const theme = props.api.theme.current;
-
   if (!props.state.miniSession && !props.state.copiedContext) return <text />;
 
   return (
     <box flexDirection="row" gap={1}>
       <Show when={props.state.miniSession}>
         {(miniSession) => (
-          <text fg={miniSession().warning ? theme.warning : theme.textMuted}>
+          <text
+            fg={
+              miniSession().warning ? props.theme.warning : props.theme.textMuted
+            }
+          >
             {miniSession().text}
           </text>
         )}
       </Show>
       <Show when={props.state.miniSession && props.state.copiedContext}>
-        <text fg={theme.textMuted}>·</text>
+        <text fg={props.theme.textMuted}>·</text>
       </Show>
       <Show when={props.state.copiedContext}>
         {(copiedContext) => (
-          <text fg={copiedContext().truncated ? theme.warning : theme.textMuted}>
+          <text
+            fg={
+              copiedContext().truncated
+                ? props.theme.warning
+                : props.theme.textMuted
+            }
+          >
             {copiedContext().text}
           </text>
         )}
@@ -716,16 +685,6 @@ function getFooterCounterWidth(state: AnswerDialogState["footerCounter"]) {
   return miniWidth + copiedWidth;
 }
 
-function getReasoningPartID(part: Extract<Part, { type: "reasoning" }>) {
-  return "id" in part && typeof part.id === "string" ? part.id : part.text;
-}
-
-function isReasoningTime(
-  value: unknown,
-): value is { start?: number; end?: number } {
-  return Boolean(value && typeof value === "object");
-}
-
 function isThinkingPartExpanded(
   state: AnswerDialogState,
   part: ThinkingMiniPart,
@@ -746,14 +705,15 @@ function formatThinkingHeader(
     : expanded
       ? "- "
       : "+ ";
-  if (title) return `${prefix}Thought: ${title}${duration ? ` · ${duration}` : ""}`;
+  if (title)
+    return `${prefix}Thought: ${title}${duration ? ` · ${duration}` : ""}`;
   return `${prefix}Thought${duration ? `: ${duration}` : ""}`;
 }
 
 function isThinkingPartLoading(part: ThinkingMiniPart) {
   if (!part.time) return false;
-  const start = Number(part.time.start);
-  const end = Number(part.time.end);
+  const start = Number(part.time.created);
+  const end = Number(part.time.completed);
   return Number.isFinite(start) && !Number.isFinite(end);
 }
 
@@ -793,22 +753,17 @@ function getThinkingBodyText(part: ThinkingMiniPart) {
 
 function formatThinkingDuration(time: ThinkingMiniPart["time"]) {
   if (!time) return "";
-  const start = Number(time.start);
-  const end = Number(time.end);
+  const start = Number(time.created);
+  const end = Number(time.completed);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
     return "";
-  const diff = end - start;
-  const milliseconds =
-    start > 10_000_000_000 || end > 10_000_000_000 ? diff : diff * 1000;
+  const milliseconds = end - start;
   if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
   const seconds = milliseconds / 1000;
   return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
 }
 
-function getMiniPartColor(
-  theme: TuiPluginApi["theme"]["current"],
-  part: MiniPart,
-) {
+function getMiniPartColor(theme: MiniTheme, part: MiniPart) {
   if (part.type === "reasoning") return theme.textMuted;
   if (part.type === "meta") return theme.textMuted;
   if (part.type === "tool" && part.status === "error") return theme.error;
@@ -819,15 +774,28 @@ function getMiniPartColor(
 
 function getCreateUserMessageHint(state: AnswerDialogState) {
   const text = [state.error, state.errorDetail].filter(Boolean).join("\n");
-  if (!/SessionPrompt\.createUserMessage|createUserMessage|chat\.message/i.test(text))
+  if (
+    !/SessionPrompt\.createUserMessage|createUserMessage|chat\.message/i.test(text)
+  )
     return undefined;
   return "Hint: OpenCode failed while creating the user message. A server plugin chat.message hook may be throwing.";
 }
 
-export function createOverlaySlot(getOverlay: () => OverlayState | undefined) {
+export function createOverlaySlot(options: {
+  ctx: TuiContext;
+  getOverlay: () => OverlayState | undefined;
+  actions: MiniKeybindActions;
+}) {
   return () => {
+    registerPanelKeymap(
+      options.ctx.keymap,
+      buildPanelCommands(options.actions),
+      () => Boolean(options.getOverlay()),
+    );
+    registerGlobalKeymap(options.ctx.keymap, buildGlobalCommands(options.actions));
+
     return (
-      <Show when={getOverlay()}>
+      <Show when={options.getOverlay()}>
         {(current) => (
           <AnswerDialog
             api={current().api}

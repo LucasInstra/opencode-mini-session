@@ -1,130 +1,87 @@
-import { readFile, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { TuiPluginApi, TuiPluginMeta } from "@opencode-ai/plugin/tui";
 import type { Setter } from "solid-js";
+import type { TuiContext } from "./opencode";
 import { isVersionNewer } from "./version";
 
 const PACKAGE_NAME = "opencode-mini-session";
+export const UPDATE_COMMAND = `opencode plugin update ${PACKAGE_NAME}`;
 
 type PackageJson = {
   name?: string;
   version?: string;
-  dependencies?: Record<string, string>;
 };
 
-export type UpdateResult =
-  | { updated: true; name: string; current: string; latest: string; removeDir: string }
-  | {
-      updated: false;
-      error: "remove_failed";
-      name: string;
-      current: string;
-      latest: string;
-      removeDir: string;
-    }
-  | { updated: false };
-
-export async function checkAutoUpdate(
-  meta: TuiPluginMeta,
-  signal: AbortSignal,
-): Promise<UpdateResult> {
-  if (meta.source !== "npm") return { updated: false };
-
-  const packageDir = await findPackageDir(dirname(fileURLToPath(import.meta.url)));
-  if (!packageDir) return { updated: false };
-
-  return checkPackageUpdate(packageDir, signal);
-}
+export type UpdateCheckResult =
+  | { updated: false }
+  | { updated: true; name: string; current: string; latest: string };
 
 export function startAutoUpdate(
-  api: TuiPluginApi,
-  meta: TuiPluginMeta,
+  ctx: TuiContext,
   setUpdateWarning: Setter<string | undefined>,
+  signal: AbortSignal,
 ) {
-  void checkAutoUpdate(meta, api.lifecycle.signal)
-    .then((result) => handleAutoUpdateResult(api, result, setUpdateWarning))
+  void checkAutoUpdate(signal)
+    .then((result) => handleAutoUpdateResult(ctx, result, setUpdateWarning))
     .catch(() => {});
 }
 
 export function handleAutoUpdateResult(
-  api: { ui: Pick<TuiPluginApi["ui"], "toast"> },
-  result: UpdateResult,
+  ctx: Pick<TuiContext, "ui">,
+  result: UpdateCheckResult,
   setUpdateWarning: (warning: string | undefined) => void,
 ) {
-  if (result.updated) {
-    const warning = buildUpdateWarning(result.latest);
-    setUpdateWarning(warning);
-    api.ui.toast({
-      variant: "info",
-      message: `New ${result.name} ${result.latest} version available. Restart opencode to apply the update.`,
-      duration: 8000,
-    });
-    return;
-  }
+  if (!result.updated) return;
 
-  if ("error" in result && result.error === "remove_failed") {
-    api.ui.toast({
-      variant: "warning",
-      message: `Could not update ${result.name}. Clear the opencode plugin cache and restart.`,
-      duration: 8000,
-    });
-  }
+  setUpdateWarning(buildUpdateWarning(result.latest));
+  ctx.ui.toast.show({
+    variant: "info",
+    message: `New ${result.name} ${result.latest} version available. Run \`${UPDATE_COMMAND}\` to update.`,
+    duration: 8000,
+  });
 }
 
 export function buildUpdateWarning(latest: string) {
-  return `New version available: ${latest}. Restart opencode to finish updating.`;
+  return `New version available: ${latest}. Run \`${UPDATE_COMMAND}\` to update.`;
 }
 
-export async function checkPackageUpdate(
-  packageDir: string,
+export async function checkAutoUpdate(
   signal: AbortSignal,
-  fetchVersion: (name: string, signal: AbortSignal) => Promise<string | undefined> = fetchLatestVersion,
-  remove: (path: string) => Promise<void> = (path) =>
-    rm(path, { recursive: true, force: true }),
-): Promise<UpdateResult> {
+  findDir: (startDir: string) => Promise<string | undefined> = findPackageDir,
+  fetchVersion: (
+    name: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> = fetchLatestVersion,
+): Promise<UpdateCheckResult> {
+  const packageDir = await findDir(dirname(fileURLToPath(import.meta.url)));
+  if (!packageDir) return { updated: false };
+  if (!isNodeModulesInstall(packageDir)) return { updated: false };
+
   const pkg = await readPackageJson(join(packageDir, "package.json"));
   if (!pkg?.name || !pkg.version) return { updated: false };
 
   const latest = await fetchVersion(pkg.name, signal);
   if (!latest || !isVersionNewer(latest, pkg.version)) return { updated: false };
 
-  const removeDir = await selectUpdateRemoveDir(packageDir, pkg.name);
-  try {
-    await remove(removeDir);
-  } catch {
-    return {
-      updated: false,
-      error: "remove_failed",
-      name: pkg.name,
-      current: pkg.version,
-      latest,
-      removeDir,
-    };
-  }
-
   return {
     updated: true,
     name: pkg.name,
     current: pkg.version,
     latest,
-    removeDir,
   };
 }
 
-export function parseLatestVersion(data: unknown) {
-  return data && typeof data === "object" && typeof (data as { version?: unknown }).version === "string"
-    ? (data as { version: string }).version
-    : undefined;
+export function isNodeModulesInstall(packageDir: string) {
+  return packageDir.replaceAll("\\", "/").includes("/node_modules/");
 }
 
-export async function selectUpdateRemoveDir(packageDir: string, name: string) {
-  const nodeModulesDir = dirname(packageDir);
-  if (basename(nodeModulesDir) !== "node_modules") return packageDir;
-
-  const wrapperDir = dirname(nodeModulesDir);
-  const wrapperPkg = await readPackageJson(join(wrapperDir, "package.json"));
-  return wrapperPkg?.dependencies?.[name] ? wrapperDir : packageDir;
+export function parseLatestVersion(data: unknown) {
+  return data &&
+    typeof data === "object" &&
+    typeof (data as { version?: unknown }).version === "string"
+    ? (data as { version: string }).version
+    : undefined;
 }
 
 async function findPackageDir(startDir: string) {
@@ -150,9 +107,10 @@ async function readPackageJson(path: string): Promise<PackageJson | undefined> {
 
 async function fetchLatestVersion(name: string, signal: AbortSignal) {
   try {
-    const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/latest`, {
-      signal,
-    });
+    const response = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(name)}/latest`,
+      { signal },
+    );
     if (!response.ok) return undefined;
     return parseLatestVersion(await response.json());
   } catch {

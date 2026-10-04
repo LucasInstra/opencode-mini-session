@@ -24,13 +24,11 @@ export const DEFAULT_FULL_TOKEN_LIMIT = 50_000;
 export const DEFAULT_KEYBIND = "alt+b";
 export const DEFAULT_FRESH_KEYBIND = "alt+n";
 export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
-export const THINKING_TEXT = "Thinking...";
 
 export const SAFE_TOOLS = {
+  read: true,
   glob: true,
   grep: true,
-  list: true,
-  read: true,
   webfetch: true,
 };
 

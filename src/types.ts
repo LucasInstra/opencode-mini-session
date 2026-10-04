@@ -1,7 +1,7 @@
 import type { InputRenderable, ScrollBoxRenderable } from "@opentui/core";
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui";
-import type { Message, Part } from "@opencode-ai/sdk/v2";
+import type { SessionMessageInfo } from "@opencode/client";
 import type { FooterCounterState } from "./counter";
+import type { TuiContext } from "./opencode";
 
 export type MiniConfig = {
   model: string | null;
@@ -16,9 +16,27 @@ export type MiniConfig = {
 
 export type MiniMode = "main" | "fresh";
 
+export type SessionToolStatus = "streaming" | "running" | "completed" | "error";
+
+export type SessionPart =
+  | { type: "text"; text: string }
+  | {
+      type: "reasoning";
+      id: string;
+      text: string;
+      time?: { created?: number; completed?: number };
+    }
+  | {
+      type: "tool";
+      name: string;
+      status: SessionToolStatus;
+      input?: Record<string, unknown>;
+      title?: string;
+    };
+
 export type SessionEntry = {
-  info: Message;
-  parts: Part[];
+  info: SessionMessageInfo;
+  parts: SessionPart[];
 };
 
 export type ResolvedModel = {
@@ -56,8 +74,8 @@ export type ActiveDialogController = {
 export type AnswerDialogState = {
   mode: MiniMode;
   entries: SessionEntry[];
-  streamingAnswer: string;
   loading: boolean;
+  waitingForResponse: boolean;
   scrollbarVisible: boolean;
   spinnerFrame: number;
   copiedContextTokens?: number;
@@ -76,7 +94,7 @@ export type AnswerDialogState = {
 };
 
 export type AnswerDialogProps = {
-  api: TuiPluginApi;
+  api: TuiContext;
   title: string;
   version?: string;
   modelName: string;
