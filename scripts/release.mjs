@@ -37,7 +37,7 @@ run("npm", ["version", "--no-git-tag-version", versionArg]);
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const tag = `v${pkg.version}`;
 
-run("git", ["commit", "-m", tag, "--", "package.json", "package-lock.json"]);
+run("git", ["commit", "-m", tag, "package.json", "bun.lock"]);
 run("git", ["tag", tag]);
 
 run("git", ["push", "origin", branch]);
