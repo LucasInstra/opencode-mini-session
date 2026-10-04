@@ -4,8 +4,7 @@ import {
   type ScrollBoxRenderable,
   SyntaxStyle,
 } from "@opentui/core";
-import { createMemo, Show } from "solid-js";
-import { THINKING_TEXT } from "../constants";
+import { createMemo, Index, Show } from "solid-js";
 import {
   buildGlobalCommands,
   buildPanelCommands,
@@ -66,6 +65,7 @@ type MiniMessage = {
   role: "user" | "assistant";
   parts: MiniPart[];
   modelName?: string;
+  streaming: boolean;
 };
 
 const THINKING_SPINNER_FRAMES = [
@@ -119,10 +119,7 @@ export function AnswerDialog(props: AnswerDialogProps) {
     () =>
       !props.state.loading &&
       !props.state.error &&
-      Boolean(
-        extractAssistantText(props.state.entries) ||
-        props.state.streamingAnswer.trim(),
-      ),
+      Boolean(extractAssistantText(props.state.entries)),
   );
   const createUserMessageHint = createMemo(() =>
     getCreateUserMessageHint(props.state),
@@ -208,65 +205,81 @@ export function AnswerDialog(props: AnswerDialogProps) {
               {props.state.update ? (
                 <text fg={theme.warning}>{props.state.update}</text>
               ) : null}
+              {/* Keep Markdown renderers mounted when refreshes replace messages. */}
               {messages().length > 0 ? (
-                messages().map((message) => (
-                  <box flexDirection="column" gap={0}>
-                    <text
-                      fg={
-                        message.role === "assistant"
-                          ? theme.primary
-                          : theme.secondary
-                      }
-                    >
-                      <b>
-                        {message.role === "assistant"
-                          ? `assistant [${message.modelName ?? props.modelName}]`
-                          : message.role}
-                      </b>
-                    </text>
-                    {message.parts.map((part, index) => (
-                      <box
-                        marginTop={getMiniPartTopMargin(
-                          message.parts,
-                          index,
-                          message.role,
-                        )}
+                <Index each={messages()}>
+                  {(message) => (
+                    <box flexDirection="column" gap={0}>
+                      <text
+                        fg={
+                          message().role === "assistant"
+                            ? theme.primary
+                            : theme.secondary
+                        }
                       >
-                        {part.type === "reasoning" ? (
-                          <ThinkingPart
-                            theme={theme}
-                            part={part}
-                            expanded={isThinkingPartExpanded(
-                              props.state,
-                              part,
+                        <b>
+                          {message().role === "assistant"
+                            ? `assistant [${message().modelName ?? props.modelName}]`
+                            : message().role}
+                        </b>
+                      </text>
+                      <Index each={message().parts}>
+                        {(part, index) => (
+                          <box
+                            marginTop={getMiniPartTopMargin(
+                              message().parts,
+                              index,
+                              message().role,
                             )}
-                            spinnerFrame={props.state.spinnerFrame}
-                            onToggle={() => props.onToggleThinkingPart(part.id)}
-                          />
-                        ) : message.role === "assistant" &&
-                        part.type === "text" &&
-                        !props.state.loading ? (
-                          <markdown
-                            content={part.text}
-                            syntaxStyle={mdSyntaxStyle}
-                            fg={theme.markdownText}
-                            streaming={props.state.loading}
-                            width={transcriptContentWidth}
-                          />
-                        ) : (
-                          <text fg={getMiniPartColor(theme, part)}>
-                            {formatMiniPart(part)}
-                          </text>
+                          >
+                            {part().type === "reasoning" ? (
+                              <ThinkingPart
+                                theme={theme}
+                                part={part() as ThinkingMiniPart}
+                                expanded={isThinkingPartExpanded(
+                                  props.state,
+                                  part() as ThinkingMiniPart,
+                                )}
+                                spinnerFrame={props.state.spinnerFrame}
+                                onToggle={() => props.onToggleThinkingPart(
+                                  (part() as ThinkingMiniPart).id,
+                                )}
+                              />
+                            ) : message().role === "assistant" &&
+                            part().type === "text" ? (
+                              <markdown
+                                content={part().text}
+                                syntaxStyle={mdSyntaxStyle}
+                                fg={theme.markdownText}
+                                streaming={message().streaming}
+                                width={transcriptContentWidth}
+                              />
+                            ) : (
+                              <text fg={getMiniPartColor(theme, part())}>
+                                {formatMiniPart(part())}
+                              </text>
+                            )}
+                          </box>
                         )}
-                      </box>
-                    ))}
-                  </box>
-                ))
-              ) : props.state.loading ? (
-                <text fg={theme.textMuted}>{THINKING_TEXT}</text>
-              ) : (
+                      </Index>
+                    </box>
+                  )}
+                </Index>
+              ) : !props.state.loading ? (
                 <text fg={theme.textMuted}>Ask a side question below.</text>
-              )}
+              ) : null}
+              <Show when={props.state.loading && props.state.waitingForResponse}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary}>
+                    <b>{`assistant [${props.modelName}]`}</b>
+                  </text>
+                  <box marginTop={1}>
+                    <text fg={theme.textMuted}>
+                      {THINKING_SPINNER_FRAMES[props.state.spinnerFrame]}
+                    </text>
+                  </box>
+                </box>
+              </Show>
               {props.state.error ? (
                 <text fg={theme.error}>Error: {props.state.error}</text>
               ) : null}
@@ -275,9 +288,6 @@ export function AnswerDialog(props: AnswerDialogProps) {
               ) : null}
               {createUserMessageHint() ? (
                 <text fg={theme.warning}>{createUserMessageHint()}</text>
-              ) : null}
-              {props.state.loading && messages().length > 0 ? (
-                <text fg={theme.textMuted}>{THINKING_TEXT}</text>
               ) : null}
             </box>
           </scrollbox>
@@ -397,6 +407,10 @@ function buildMiniMessages(state: AnswerDialogState): MiniMessage[] {
         entry.info.type === "assistant"
           ? state.messageModels[entry.info.id]
           : undefined,
+      streaming:
+        entry.info.type === "assistant" &&
+        state.loading &&
+        entry.info.time.completed === undefined,
     };
 
     if (message.parts.length === 0) continue;
@@ -405,62 +419,11 @@ function buildMiniMessages(state: AnswerDialogState): MiniMessage[] {
     if (shouldMergeMiniMessages(previous, message)) {
       previous.parts.push(...message.parts);
       previous.modelName ??= message.modelName;
+      previous.streaming ||= message.streaming;
       continue;
     }
 
     messages.push(message);
-  }
-
-  if (!state.streamingAnswer) return messages;
-
-  const lastAssistant = [...messages]
-    .reverse()
-    .find((message) => message.role === "assistant");
-
-  if (!lastAssistant) {
-    messages.push({
-      id: "streaming-assistant",
-      role: "assistant",
-      parts: [{ type: "text", text: state.streamingAnswer }],
-      modelName: undefined,
-    });
-    return messages;
-  }
-
-  const lastText = [...lastAssistant.parts]
-    .reverse()
-    .find(
-      (part): part is Extract<MiniPart, { type: "text" }> =>
-        part.type === "text",
-    );
-
-  if (lastText) {
-    const streamingTrimmed = state.streamingAnswer.trim();
-    const lastTextTrimmed = lastText.text.trim();
-
-    if (streamingTrimmed === lastTextTrimmed) {
-      // Identical content, no change needed
-    } else if (
-      streamingTrimmed.startsWith(lastTextTrimmed) &&
-      streamingTrimmed.length > lastTextTrimmed.length
-    ) {
-      // streamingAnswer contains existing text plus more (cumulative delta)
-      lastText.text = state.streamingAnswer;
-    } else if (!lastTextTrimmed.endsWith(streamingTrimmed)) {
-      // streamingAnswer is genuinely new text (incremental delta)
-      lastText.text += state.streamingAnswer;
-    }
-  } else {
-    const lastReasoning = [...lastAssistant.parts]
-      .reverse()
-      .find((part) => part.type === "reasoning");
-
-    if (
-      !lastReasoning ||
-      lastReasoning.text.trim() !== state.streamingAnswer.trim()
-    ) {
-      lastAssistant.parts.push({ type: "text", text: state.streamingAnswer });
-    }
   }
 
   return messages;
@@ -541,8 +504,8 @@ function estimateMiniMessagesHeight(
   if (hint) lines += estimateWrappedLines(hint, width);
   if (state.notice)
     lines += estimateWrappedLines(`Warning: ${state.notice}`, width);
-  if (state.loading && messages.length > 0) lines += 1;
-  if (messages.length === 0) lines += 1;
+  if (messages.length === 0 && !state.loading) lines += 1;
+  if (state.loading && state.waitingForResponse) lines += 3;
   return lines;
 }
 
@@ -588,7 +551,7 @@ function toMiniPart(part: SessionPart): MiniPart | undefined {
   if (part.type === "reasoning")
     return {
       type: "reasoning",
-      id: getReasoningPartID(part),
+      id: part.id,
       text: part.text,
       time: part.time,
     };
@@ -608,7 +571,7 @@ function toMiniPart(part: SessionPart): MiniPart | undefined {
 function toReasoningMiniParts(
   part: Extract<SessionPart, { type: "reasoning" }>,
 ) {
-  const baseID = getReasoningPartID(part);
+  const baseID = part.id;
   const segments = splitReasoningText(part.text.trim());
 
   return segments.map((text, index) => ({
@@ -720,10 +683,6 @@ function getFooterCounterWidth(state: AnswerDialogState["footerCounter"]) {
   const copiedWidth = state.copiedContext?.text.length ?? 0;
   if (miniWidth && copiedWidth) return miniWidth + copiedWidth + 3;
   return miniWidth + copiedWidth;
-}
-
-function getReasoningPartID(part: Extract<SessionPart, { type: "reasoning" }>) {
-  return `reasoning:${part.text.slice(0, 48)}`;
 }
 
 function isThinkingPartExpanded(

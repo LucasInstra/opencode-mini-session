@@ -82,8 +82,43 @@ describe("adaptTheme", () => {
       },
     } as unknown as ResolvedTheme);
 
-    expect(adapted.backgroundPanel).toBe("raised.high");
-    expect(adapted.borderSubtle).toBe("raised.base");
+    expect(adapted.backgroundPanel).toBe("raised.base");
+    expect(adapted.borderSubtle).toBe("raised.high");
+  });
+
+  it("maps current base/muted tokens and preserves migrated V1 role colors", () => {
+    const adapted = adaptTheme({
+      hue: { interactive: { 200: "assistant.green" } },
+      categorical: [{ 200: "user.pink" }],
+      text: {
+        base: "text.base",
+        muted: "text.muted",
+        action: { primary: { base: "action.base" } },
+        feedback: {
+          warning: { base: "warning.orange" },
+          error: { base: "error.red" },
+          info: { base: "info.blue" },
+          success: { base: "success.green" },
+        },
+      },
+      background: { base: "background", raised: { base: "panel", high: "input" } },
+      border: { base: "border.base" },
+      markdown: { text: "markdown.text" },
+    } as unknown as ResolvedTheme);
+
+    expect(adapted.text).toBe("text.base");
+    expect(adapted.textMuted).toBe("text.muted");
+    expect(adapted.primary).toBe("assistant.green");
+    expect(adapted.secondary).toBe("user.pink");
+    expect(adapted.warning).toBe("warning.orange");
+    expect(adapted.error).toBe("error.red");
+    expect(adapted.info).toBe("info.blue");
+    expect(adapted.success).toBe("success.green");
+    expect(adapted.border).toBe("border.base");
+    expect(adapted.backgroundPanel).toBe("panel");
+    expect(adapted.borderSubtle).toBe("input");
+    expect(adapted.markdownText).toBe("markdown.text");
+    expect(adapted.markdownHeading).toBe("text.base");
   });
 
   it("never throws on a partial theme and falls back to the text color", () => {

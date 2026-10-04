@@ -101,19 +101,31 @@ function fakeCtx() {
     },
     data: {
       on: vi.fn(() => () => {}),
+      listen: vi.fn(() => () => {}),
+      session: { message: { list: vi.fn(() => []) } },
     },
   } as any;
 }
 
 function captureHandlers(ctx: ReturnType<typeof fakeCtx>) {
   const handlers: Record<string, (event: any) => void> = {};
+  let listener: (event: any) => void = () => {};
+  ctx.data.listen.mockImplementation((handler: (event: any) => void) => {
+    listener = handler;
+    return () => {};
+  });
   ctx.data.on.mockImplementation(
     (name: string, handler: (event: any) => void) => {
       handlers[name] = handler;
       return () => {};
     },
   );
-  return handlers;
+  return new Proxy(handlers, {
+    get: (_, name: string) => (event: any) => {
+      listener({ details: { type: name, ...event } });
+      handlers[name]?.(event);
+    },
+  });
 }
 
 function assistantEntry(options: {
@@ -270,6 +282,245 @@ describe("openMiniSession", () => {
 });
 
 describe("startQuestion", () => {
+  it("renders the observed V2 host projection without merging overlapping ordinals", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    const context = await vi.importActual<typeof import("../src/context")>("../src/context");
+    getSessionEntries.mockImplementation(context.getSessionEntries as any);
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
+    let overlay: OverlayState | undefined;
+    await startQuestion(
+      ctx, config(), "fresh", "session-1",
+      ((next: OverlayState | undefined) => { overlay = next; }) as any,
+      { get: () => undefined, set: vi.fn() },
+      { get: () => undefined, set: vi.fn() },
+      { get: () => false, set: vi.fn() }, vi.fn(),
+    );
+    expect(overlay?.onSubmit("question")).toBe(true);
+    expect(overlay?.state.waitingForResponse).toBe(true);
+    const user = { id: "user-1", type: "user", text: "question", time: { created: 1791150249711 } };
+    const assistant = {
+      id: "msg_108dfd6f9001BMVOxknuBqqCE4", type: "assistant",
+      time: { created: 1791150249742 } as { created: number; completed?: number },
+      content: [] as any[],
+    };
+    ctx.data.session.message.list.mockReturnValue([user]);
+    handlers["session.inbox.enqueued"]({ data: { sessionID: "mini-session" } });
+    await flushTimers();
+    expect(overlay?.state.entries[0].parts).toEqual([{ type: "text", text: "question" }]);
+    expect(overlay?.state.waitingForResponse).toBe(true);
+
+    // Metadata observed in V2.0.22, not a reducer simulated from ordinals.
+    // The host's reasoning and text parts both received ordinal 0; text.started
+    // preceded reasoning.ended. Bodies below are non-sensitive stand-ins.
+    assistant.content = [{ type: "reasoning", text: "", time: { created: 1791150250412 } }];
+    ctx.data.session.message.list.mockReturnValue([user, assistant]);
+    const emit = async (type: string, created: number, delta?: string) => {
+      handlers[type]({ created, data: {
+        sessionID: "mini-session", assistantMessageID: assistant.id, ordinal: 0, delta,
+      } });
+      await flushStreamingRender();
+    };
+    await emit("session.reasoning.started", 1791150250412);
+    expect(overlay?.state.waitingForResponse).toBe(false);
+    expect(overlay?.state.entries[1].parts[0]).toMatchObject({ type: "reasoning", text: "" });
+    assistant.content[0].text = "r".repeat(388);
+    await emit("session.reasoning.delta", 1791150252155, "r".repeat(61));
+    expect(overlay?.state.entries[1].parts[0]).toMatchObject({ type: "reasoning", text: "r".repeat(388) });
+    assistant.content.push({ type: "text", text: "" });
+    await emit("session.text.started", 1791150252196);
+    assistant.content[0].time.completed = 1791150252223;
+    await emit("session.reasoning.ended", 1791150252223);
+    assistant.content[1].text = "a".repeat(69);
+    await emit("session.text.delta", 1791150252227, "a".repeat(69));
+    await emit("session.text.ended", 1791150252229);
+    assistant.time.completed = 1791150252237;
+    await emit("session.step.ended", 1791150252237);
+    expect(overlay?.state.waitingForResponse).toBe(false);
+    await emit("session.execution.succeeded", 1791150252244);
+    expect(overlay?.state.loading).toBe(false);
+    expect(overlay?.state.entries[1].parts).toEqual([
+      { type: "reasoning", id: `${assistant.id}:reasoning:0`, text: "r".repeat(388),
+        time: { created: 1791150250412, completed: 1791150252223 } },
+      { type: "text", text: "a".repeat(69) },
+    ]);
+    expect(ctx.client.session.context).toHaveBeenCalledTimes(1);
+    expect(overlay?.onSubmit("follow-up")).toBe(true);
+    expect(overlay?.state.waitingForResponse).toBe(true);
+    handlers["session.usage.updated"]({ data: { sessionID: "mini-session" } });
+    await flushTimers();
+    expect(overlay?.state.waitingForResponse).toBe(true);
+
+    // A fast text-only response may already be complete by the render tick.
+    // Its owning event, not the previous answer, removes the pending spinner.
+    ctx.data.session.message.list.mockReturnValue([
+      user, assistant,
+      { id: "user-2", type: "user", text: "follow-up", time: { created: 10 } },
+      { id: "assistant-2", type: "assistant", time: { created: 11, completed: 12 },
+        content: [{ type: "text", text: "Follow-up answer" }] },
+    ]);
+    handlers["session.text.ended"]({ data: {
+      sessionID: "mini-session", assistantMessageID: "assistant-2", ordinal: 0,
+    } });
+    await flushTimers();
+    expect(overlay?.state.waitingForResponse).toBe(false);
+    overlay?.onClose();
+    await flushMicrotasks();
+  });
+
+  it.each([
+    ["session.execution.succeeded", "session.idle"],
+    ["session.idle", "session.execution.succeeded"],
+  ])(
+    "keeps a follow-up active when %s finishes before the queued %s callback",
+    async (firstEvent, delayedEvent) => {
+      vi.useFakeTimers();
+      resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+      (getSessionEntries as any).mockImplementation((messages: any) => messages);
+
+      const ctx = fakeCtx();
+      const handlers = captureHandlers(ctx);
+      const firstEntries = [
+        assistantEntry({ id: "assistant-1", text: "first answer", completed: true }),
+      ];
+      const secondEntries = [
+        ...firstEntries,
+        assistantEntry({ id: "assistant-2", text: "second answer", completed: true }),
+      ];
+      let overlay: OverlayState | undefined;
+      let followUp = false;
+
+      await startQuestion(
+        ctx,
+        config(),
+        "main",
+        "session-1",
+        ((next: OverlayState | undefined) => {
+          overlay = next;
+          if (followUp && next && !next.state.loading) {
+            followUp = false;
+            next.onSubmit("second question");
+          }
+        }) as any,
+        { get: () => undefined, set: vi.fn() },
+        { get: () => undefined, set: vi.fn() },
+        { get: () => false, set: vi.fn() },
+        vi.fn(),
+      );
+
+      expect(overlay?.onSubmit("first question")).toBe(true);
+      ctx.data.session.message.list.mockReturnValue(firstEntries);
+      const event = { data: { sessionID: "mini-session" } };
+      followUp = true;
+      handlers[firstEvent](event);
+      handlers[delayedEvent](event);
+      await flushMicrotasks();
+      expect(overlay?.state.loading).toBe(true);
+      const streamingEntries = [
+        ...firstEntries,
+        assistantEntry({ id: "assistant-2", text: "second answer streaming" }),
+      ];
+      ctx.data.session.message.list.mockReturnValue(streamingEntries);
+      handlers["session.text.delta"]({
+        data: { sessionID: "mini-session", delta: "second answer streaming" },
+      });
+      await flushStreamingRender();
+
+      expect(overlay?.state.loading).toBe(true);
+      expect(overlay?.state.entries).toEqual(streamingEntries);
+      expect(overlay?.onSubmit("third question")).toBe(false);
+
+      ctx.data.session.message.list.mockReturnValue(secondEntries);
+      handlers[firstEvent](event);
+      await flushMicrotasks();
+      expect(overlay?.state.loading).toBe(false);
+      expect(overlay?.state.entries).toEqual(secondEntries);
+      expect(overlay?.state.messageModels["assistant-2"]).toBe(
+        overlay?.state.messageModels["assistant-1"],
+      );
+      expect(overlay?.state.messageModels["assistant-2"]).toBeDefined();
+      overlay?.onClose();
+      await flushMicrotasks();
+    },
+  );
+
+  it.each(["scheduled", "queued-render"])(
+    "ignores a %s transcript refresh from the previous question",
+    async (phase) => {
+      vi.useFakeTimers();
+      resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+      (getSessionEntries as any).mockImplementation((messages: any) => messages);
+
+      const ctx = fakeCtx();
+      const handlers = captureHandlers(ctx);
+      const firstEntries = [
+        assistantEntry({ id: "assistant-1", text: "first answer", completed: true }),
+      ];
+      let overlay: OverlayState | undefined;
+      let followUp = false;
+      let renders = 0;
+
+      await startQuestion(
+        ctx,
+        config(),
+        "main",
+        "session-1",
+        ((next: OverlayState | undefined) => {
+          overlay = next;
+          renders++;
+          if (followUp && next && !next.state.loading) {
+            followUp = false;
+            next.onSubmit("second question");
+          }
+        }) as any,
+        { get: () => undefined, set: vi.fn() },
+        { get: () => undefined, set: vi.fn() },
+        { get: () => false, set: vi.fn() },
+        vi.fn(),
+      );
+
+      expect(overlay?.onSubmit("first question")).toBe(true);
+      const event = { data: { sessionID: "mini-session" } };
+      handlers["session.reasoning.delta"](event);
+      ctx.data.session.message.list.mockReturnValue(firstEntries);
+      handlers["session.execution.succeeded"](event);
+      const beforeCompletion = renders;
+      if (phase === "queued-render") {
+        // Queue the old timer's render after completion, then submit the next
+        // question from the completion render before that old callback runs.
+        vi.advanceTimersByTime(50);
+        followUp = true;
+      }
+      await flushMicrotasks();
+      if (phase === "scheduled") {
+        expect(overlay?.state.loading).toBe(false);
+        expect(overlay?.onSubmit("second question")).toBe(true);
+      } else {
+        expect(overlay?.state.loading).toBe(true);
+        expect(renders - beforeCompletion).toBe(2);
+      }
+      const streamingEntries = [
+        ...firstEntries,
+        assistantEntry({ id: "assistant-2", text: "second answer streaming" }),
+      ];
+      ctx.data.session.message.list.mockReturnValue(streamingEntries);
+      handlers["session.text.delta"]({
+        data: { sessionID: "mini-session", delta: "second answer streaming" },
+      });
+      const contextCalls = ctx.client.session.context.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(250);
+      await flushMicrotasks();
+
+      expect(ctx.client.session.context).toHaveBeenCalledTimes(contextCalls);
+      expect(overlay?.state.loading).toBe(true);
+      expect(overlay?.state.entries).toEqual(streamingEntries);
+      expect(overlay?.onSubmit("third question")).toBe(false);
+      overlay?.onClose();
+      await flushMicrotasks();
+    },
+  );
+
   it("forces bottom scroll and follows streaming after submitting a prompt", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());

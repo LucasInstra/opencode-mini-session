@@ -64,15 +64,16 @@ export function getMessageParts(info: SessionMessageInfo): SessionPart[] {
 
   if (info.type === "assistant") {
     const parts: SessionPart[] = [];
-    for (const content of info.content) {
+    for (const [index, content] of info.content.entries()) {
       if (content.type === "text") {
         if (content.text.trim()) parts.push({ type: "text", text: content.text.trim() });
         continue;
       }
       if (content.type === "reasoning") {
-        if (content.text.trim()) {
+        if (content.text.trim() || !content.time?.completed) {
           parts.push({
             type: "reasoning",
+            id: `${info.id}:reasoning:${index}`,
             text: content.text.trim(),
             time: content.time
               ? { created: content.time.created, completed: content.time.completed }

@@ -22,6 +22,7 @@ export type SessionPart =
   | { type: "text"; text: string }
   | {
       type: "reasoning";
+      id: string;
       text: string;
       time?: { created?: number; completed?: number };
     }
@@ -73,8 +74,8 @@ export type ActiveDialogController = {
 export type AnswerDialogState = {
   mode: MiniMode;
   entries: SessionEntry[];
-  streamingAnswer: string;
   loading: boolean;
+  waitingForResponse: boolean;
   scrollbarVisible: boolean;
   spinnerFrame: number;
   copiedContextTokens?: number;

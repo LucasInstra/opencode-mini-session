@@ -134,8 +134,8 @@ export async function startQuestion(
   const dialogState: AnswerDialogState = {
     mode,
     entries: [],
-    streamingAnswer: "",
     loading: false,
+    waitingForResponse: false,
     scrollbarVisible: false,
     spinnerFrame: 0,
     copiedContextTokens: copiedContext.usedTokens,
@@ -153,13 +153,13 @@ export async function startQuestion(
   };
 
   const submissionModelQueue: string[] = [];
+  let submissionGeneration = 0;
 
   const unsubscribers: Array<() => void> = [];
   let tempSessionID: string | undefined;
   let closed = false;
   let hidden = false;
   let continuing = false;
-  let renderTimer: ReturnType<typeof setTimeout> | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let scrollTimer: ReturnType<typeof setTimeout> | undefined;
   let focusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -300,10 +300,6 @@ export async function startQuestion(
   const hide = () => {
     if (closed || hidden) return;
     hidden = true;
-    if (renderTimer) {
-      clearTimeout(renderTimer);
-      renderTimer = undefined;
-    }
     clearScrollTimer();
     clearFocusTimer();
     clearSpinnerTimer();
@@ -337,7 +333,6 @@ export async function startQuestion(
         unsubscribers.pop()?.();
       } catch {}
     }
-    if (renderTimer) clearTimeout(renderTimer);
     clearScrollTimer();
     clearFocusTimer();
     clearSpinnerTimer();
@@ -401,8 +396,7 @@ export async function startQuestion(
   const renderOverlay = (options: { focusInput?: boolean } = {}) => {
     if (closed) return;
     syncCounterState();
-    const streamingActive =
-      dialogState.loading || Boolean(dialogState.streamingAnswer);
+    const streamingActive = dialogState.loading;
     const currentScrollTop = overlayScroller?.scrollTop ?? 0;
     const currentScrollHeight = overlayScroller?.scrollHeight ?? 0;
     if (streamingActive && !forceScrollToBottom && !pendingScrollToBottom) {
@@ -419,10 +413,6 @@ export async function startQuestion(
       forceScrollToBottom || (streamingActive && followStreamingToBottom);
     forceScrollToBottom = false;
     updateScrollSnapshot();
-    if (renderTimer) {
-      clearTimeout(renderTimer);
-      renderTimer = undefined;
-    }
     if (hidden) return;
     setOverlay({
       api: ctx,
@@ -486,14 +476,6 @@ export async function startQuestion(
     isVisible: () => !hidden,
   };
 
-  const scheduleRenderOverlay = () => {
-    if (closed || renderTimer) return;
-    renderTimer = setTimeout(() => {
-      renderTimer = undefined;
-      renderOverlay();
-    }, 50);
-  };
-
   active.set(controller);
   renderOverlay({ focusInput: true });
 
@@ -540,12 +522,14 @@ export async function startQuestion(
       return false;
     }
     const promptSessionID = tempSessionID;
+    const generation = ++submissionGeneration;
+    clearRefreshTimer();
 
     dialogState.error = undefined;
     dialogState.errorDetail = undefined;
     dialogState.loading = true;
+    dialogState.waitingForResponse = true;
     dialogState.spinnerFrame = 0;
-    dialogState.streamingAnswer = "";
     followStreamingToBottom = true;
     forceScrollToBottom = true;
     submissionModelQueue.push(getModelName());
@@ -574,7 +558,7 @@ export async function startQuestion(
           }),
         );
       } catch (cause) {
-        if (closed) return;
+        if (closed || generation !== submissionGeneration) return;
         setPromptError("session.prompt throw", cause);
         renderOverlay();
       }
@@ -646,21 +630,32 @@ export async function startQuestion(
       currentTokenMessageID = latest.messageID;
     };
 
-    const refreshSession = async () => {
-      if (closed || !tempSessionID) return;
-      const messages = await fetchSessionMessages(ctx, tempSessionID);
-      if (closed) return;
+    const refreshSession = async (generation: number, assistantMessageID?: string) => {
+      if (closed || !tempSessionID || generation !== submissionGeneration) return;
+      // The host projects live parts before plugin event listeners run. Context
+      // reads contain durable content and omit the body of an active stream.
+      const messages = ctx.data.session.message.list(tempSessionID);
       dialogState.entries = getSessionEntries(messages);
-      dialogState.streamingAnswer = "";
+      if (
+        dialogState.entries.some((entry) =>
+          entry.info.type === "assistant" &&
+          (entry.info.time.completed === undefined || entry.info.id === assistantMessageID) &&
+          entry.parts.length > 0,
+        )
+      ) dialogState.waitingForResponse = false;
       refreshLastCompletedMiniInputTokens();
     };
 
-    const scheduleSessionRefresh = (delay = 50) => {
+    const scheduleSessionRefresh = (delay = 50, assistantMessageID?: string) => {
       if (closed || refreshTimer) return;
+      const generation = submissionGeneration;
       refreshTimer = setTimeout(() => {
         refreshTimer = undefined;
-        void refreshSession()
-          .then(() => renderOverlay())
+        void refreshSession(generation, assistantMessageID)
+          .then(() => {
+            if (closed || generation !== submissionGeneration) return;
+            renderOverlay();
+          })
           .catch(() => {});
       }, delay);
     };
@@ -678,14 +673,19 @@ export async function startQuestion(
           }
         }
       }
-      if (
-        !extractAssistantText(dialogState.entries) &&
-        !dialogState.streamingAnswer
-      ) {
-        dialogState.streamingAnswer = "No response generated.";
-      }
       dialogState.loading = false;
       clearSpinnerTimer();
+    };
+
+    const completeResponse = () => {
+      const generation = submissionGeneration;
+      void refreshSession(generation)
+        .then(() => {
+          if (closed || generation !== submissionGeneration) return;
+          finishResponse();
+          renderOverlay();
+        })
+        .catch(() => {});
     };
 
     if (closed) {
@@ -698,24 +698,14 @@ export async function startQuestion(
     unsubscribers.push(
       ctx.data.on("session.idle", (event) => {
         if (event.data.sessionID !== tempSessionID) return;
-        void refreshSession()
-          .then(() => {
-            finishResponse();
-            renderOverlay();
-          })
-          .catch(() => {});
+        completeResponse();
       }),
     );
 
     unsubscribers.push(
       ctx.data.on("session.execution.succeeded", (event) => {
         if (event.data.sessionID !== tempSessionID) return;
-        void refreshSession()
-          .then(() => {
-            finishResponse();
-            renderOverlay();
-          })
-          .catch(() => {});
+        completeResponse();
       }),
     );
 
@@ -728,39 +718,15 @@ export async function startQuestion(
     );
 
     unsubscribers.push(
-      ctx.data.on("session.text.delta", (event) => {
-        if (event.data.sessionID !== tempSessionID) return;
-        dialogState.streamingAnswer += event.data.delta;
-        scheduleRenderOverlay();
+      ctx.data.listen(({ details: event }) => {
+        if (!("sessionID" in event.data) || event.data.sessionID !== tempSessionID)
+          return;
+        scheduleSessionRefresh(
+          event.type.endsWith(".delta") ? 50 : 0,
+          "assistantMessageID" in event.data ? event.data.assistantMessageID : undefined,
+        );
       }),
     );
-
-    unsubscribers.push(
-      ctx.data.on("session.reasoning.delta", (event) => {
-        if (event.data.sessionID !== tempSessionID) return;
-        scheduleSessionRefresh(200);
-      }),
-    );
-
-    unsubscribers.push(
-      ctx.data.on("session.text.ended", (event) => {
-        if (event.data.sessionID !== tempSessionID) return;
-        scheduleSessionRefresh(0);
-      }),
-    );
-
-    for (const toolEvent of [
-      "session.tool.called",
-      "session.tool.success",
-      "session.tool.failed",
-    ] as const) {
-      unsubscribers.push(
-        ctx.data.on(toolEvent, (event) => {
-          if (event.data.sessionID !== tempSessionID) return;
-          scheduleSessionRefresh(50);
-        }),
-      );
-    }
   } catch (cause) {
     if (closed) return;
     setPromptError("session.create throw", cause);
@@ -931,10 +897,6 @@ function buildMiniSessionTranscript(state: AnswerDialogState) {
     }
     if (chunks.length > 0)
       lines.push(`${entry.info.type}:\n${chunks.join("\n\n")}`);
-  }
-
-  if (state.streamingAnswer.trim()) {
-    lines.push(`assistant:\n${state.streamingAnswer.trim()}`);
   }
 
   return lines.join("\n\n").trim();
