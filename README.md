@@ -1,6 +1,8 @@
 # OpenCode mini session
 
 > [!IMPORTANT]
+> Plugin v2.0.0 and later require OpenCode V2 (`opencode >= 2`). For OpenCode V1, use a v1.x release of the plugin.
+>
 > If the plugin stopped working after an OpenCode update, see the [troubleshooting information](#refresh-the-plugin).
 
 An OpenCode TUI plugin that opens interactive temporary mini sessions for side questions, either with injected main-session context or as a fresh no-context thread.
@@ -21,8 +23,6 @@ Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with n
 6. Deletes the ephemeral session on close
 
 ## Installation
-
-> Requires OpenCode V2 (`opencode >= 2`).
 
 ### Automatic
 
