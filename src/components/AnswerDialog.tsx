@@ -119,10 +119,7 @@ export function AnswerDialog(props: AnswerDialogProps) {
     () =>
       !props.state.loading &&
       (props.continueOnError || !props.state.error) &&
-      Boolean(
-        extractAssistantText(props.state.entries) ||
-        props.state.streamingAnswer.trim(),
-      ),
+      Boolean(extractAssistantText(props.state.entries)),
   );
   const createUserMessageHint = createMemo(() =>
     getCreateUserMessageHint(props.state),

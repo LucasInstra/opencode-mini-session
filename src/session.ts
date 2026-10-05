@@ -391,8 +391,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     }
     const transcript = buildMiniSessionTranscript(dialogState);
     const handoffText = handoffMode
-      ? extractLastAssistantText(dialogState.entries) ||
-        dialogState.streamingAnswer.trim()
+      ? extractLastAssistantText(dialogState.entries)
       : "";
     const text = handoffMode ? handoffText : buildContinuePrompt(transcript);
     const hasText = handoffMode
