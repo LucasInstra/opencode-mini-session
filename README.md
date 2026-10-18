@@ -1,7 +1,7 @@
 # OpenCode mini session
 
 > [!IMPORTANT]
-> Plugin v2.0.0 and later require OpenCode V2 (`opencode >= 2`). For OpenCode V1, use a v1.x release of the plugin.
+> Plugin v2.0.0 and later require OpenCode V2 (`opencode >= 2`). OpenCode V1 remains supported on the [v1 maintenance branch](https://github.com/karamanliev/opencode-mini-session/tree/v1). Use `opencode-mini-session@1`; see [OpenCode V1 installation](#opencode-v1).
 >
 > If the plugin stopped working after an OpenCode update, see the [troubleshooting information](#refresh-the-plugin).
 
@@ -41,34 +41,27 @@ Add it to your OpenCode CLI config (`~/.config/opencode/cli.json`):
 }
 ```
 
-### Local checkout
+### OpenCode V1
 
-To run an unpublished checkout, build it and load it through the global plugin directory (`~/.config/opencode/plugins`):
+For OpenCode V1 (`>=1.17.18 <2`), install the v1 plugin line:
 
 ```sh
-npm install && npm run build
-mkdir -p ~/.config/opencode/plugins/mini-session
-ln -s "$PWD/dist" ~/.config/opencode/plugins/mini-session/dist
-ln -s "$PWD/node_modules" ~/.config/opencode/plugins/mini-session/node_modules
-printf 'export { default } from "./dist/index.js";\n' > ~/.config/opencode/plugins/mini-session/tui.ts
+opencode plugin opencode-mini-session@1 -g
 ```
 
-On Windows, create the two links with `mklink /J` and write `tui.ts` with the same one-line re-export. Restart OpenCode after rebuilding.
+Or add it to your V1 TUI config (`~/.config/opencode/tui.json`):
 
-## What it does
+```json
+{
+  "plugin": [
+    "opencode-mini-session@1"
+  ]
+}
+```
 
-The mini session runs as an overlay alongside the main session without blocking it, so you can ask side questions while the main thread continues working.
+Keep the `@1` suffix to stay on v1. Plugin v1.1.4 fixes the update check that could delete the installed v1 plugin when a v2 release was available. Existing users should [refresh their installation](https://github.com/karamanliev/opencode-mini-session/blob/v1/README.md#refresh-the-plugin) to receive the fix; exact pins to older versions must be updated explicitly.
 
-Press `alt+b` for the default mini mode, or `alt+n` for a fresh mini mode with no copied conversation context. You can also run `/mini` or `/mini-fresh` from the command palette during any OpenCode session; `/mini <question>` opens the overlay and asks immediately. Type a question in the mini session dialog and send it. The plugin:
-
-1. Gathers context from the current session (token-limited)
-2. Creates a temporary isolated session with that context
-3. Sends your question to the AI and streams the response
-4. Lets you ask follow-up questions in the same mini session
-5. Optionally continues the conversation in the main thread
-6. Deletes the ephemeral session on close
-
-Ephemeral sessions are tagged with `metadata.opencodeMiniSession`. If the client crashes or is force-closed before cleanup runs, the next start removes leftover mini sessions older than 12 hours.
+For V1 configuration and troubleshooting, use the [v1 README](https://github.com/karamanliev/opencode-mini-session/blob/v1/README.md). The remaining instructions on this page are for OpenCode V2.
 
 ## Keybinds
 
