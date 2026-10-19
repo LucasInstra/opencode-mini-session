@@ -66,12 +66,26 @@ export function resolveDefaultModel(
     entries,
     fallbackModel,
   );
-  if (resolved.source !== "config") return resolved;
+  if (resolved.source !== "config") {
+    if (
+      models.length === 0 ||
+      !resolved.model.model ||
+      isAvailableModel(models, resolved.model)
+    ) {
+      return resolved;
+    }
+
+    const availableFallback =
+      fallbackModel && isAvailableModel(models, fallbackModel)
+        ? fallbackModel
+        : undefined;
+    return resolveModel(null, null, [], availableFallback);
+  }
   if (isAvailableModel(models, resolved.model)) return resolved;
 
   return {
-    ...resolveModel(null, null, entries, fallbackModel),
-    notice: `Configured mini model ${formatResolvedModel(resolved.model)} was not found. The main session model will be used.`,
+    ...resolveDefaultModel(models, null, null, entries, fallbackModel),
+    notice: `Configured mini model ${formatResolvedModel(resolved.model)} was not found. Falling back to automatic model selection.`,
   };
 }
 

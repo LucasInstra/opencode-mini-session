@@ -1217,6 +1217,71 @@ describe("startQuestion", () => {
     expect(overlay.get()?.state.notice).toContain("no longer available");
   });
 
+  it.each([
+    { model: { providerID: "openai", modelID: "gone" } },
+    {
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4.6" },
+      variant: "removed",
+    },
+  ])("does not reuse an invalid saved selection from history: %j", async (selection) => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+    const historical = assistantEntry({
+      id: "previous-answer",
+      text: "previous answer",
+    });
+    (getSessionEntries as any).mockReturnValue([
+      {
+        ...historical,
+        info: {
+          ...historical.info,
+          model: {
+            id: selection.model.modelID,
+            providerID: selection.model.providerID,
+            variant: selection.variant,
+          },
+        },
+      },
+    ]);
+    let preference: any = selection;
+    ctx.client.session.prompt.mockRejectedValueOnce(
+      new Error("temporary failure"),
+    );
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        initialQuestion: "continue the work",
+        modelPreference: {
+          get: () => preference,
+          set: (next) => {
+            preference = next;
+          },
+        },
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(preference).toBeUndefined();
+    expect(overlay.get()?.modelName).toBe("anthropic/claude-sonnet-4.6");
+    expect(ctx.client.session.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: { id: "claude-sonnet-4.6", providerID: "anthropic" },
+      }),
+    );
+    expect(ctx.client.session.switchModel).not.toHaveBeenCalled();
+    expect(overlay.get()?.state.error).toContain("temporary failure");
+
+    overlay.get()?.onRetry();
+    await flushMicrotasks();
+    expect(ctx.client.session.prompt).toHaveBeenCalledTimes(2);
+    expect(ctx.client.session.switchModel).not.toHaveBeenCalled();
+    expect(overlay.get()?.state.error).toBeUndefined();
+  });
+
   it("reflects the selected model before the rerender callback", async () => {
     const ctx = dialogCtx({
       type: "model",
