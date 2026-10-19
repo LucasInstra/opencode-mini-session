@@ -383,7 +383,7 @@ export function AnswerDialog(props: AnswerDialogProps) {
               <ActionButton
                 api={props.api}
                 label={props.continueLabel}
-                keybind="shift+enter"
+                keybind="alt+c"
                 onPress={props.onContinue}
               />
             </Show>

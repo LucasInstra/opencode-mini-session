@@ -109,6 +109,22 @@ describe("global keymap commands", () => {
 });
 
 describe("panel keymap commands", () => {
+  it.each([
+    ["mini.continue", "shift+return"],
+    ["mini.continue.fallback", "alt+c"],
+  ])("runs the current continue action through %s", (id, bind) => {
+    const continueInMainThread = vi.fn();
+    const commands = buildPanelCommands({
+      ...actions(),
+      continueInMainThread,
+    });
+    const command = commands.find((candidate) => candidate.id === id);
+
+    expect(command?.bind).toBe(bind);
+    command?.run?.();
+    expect(continueInMainThread).toHaveBeenCalledTimes(1);
+  });
+
   it("toggles the continue mode from the configured keybind", () => {
     const toggleContinueMode = vi.fn();
     const commands = buildPanelCommands({

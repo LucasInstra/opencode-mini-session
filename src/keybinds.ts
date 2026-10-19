@@ -180,6 +180,13 @@ export function buildPanelCommands(
       bind: "shift+return",
       run: () => actions.continueInMainThread(),
     },
+    {
+      id: `${CMD_CONTINUE}.fallback`,
+      title: "Continue in main thread (fallback)",
+      group: "Mini session",
+      bind: "alt+c",
+      run: () => actions.continueInMainThread(),
+    },
     ...(config.continueKeybind
       ? [
           {
