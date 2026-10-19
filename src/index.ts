@@ -1,6 +1,5 @@
 import { Plugin } from "@opencode/plugin/tui";
 import { createEffect, createSignal, untrack } from "solid-js";
-import { cleanupStaleMiniSessions } from "./cleanup";
 import { createOverlaySlot } from "./components/AnswerDialog";
 import { parseConfig } from "./config";
 import { PLUGIN_ID } from "./constants";
@@ -10,8 +9,9 @@ import { resolveMiniRouteAction, runMiniRouteAction } from "./routing";
 import { openMiniSession, openModelPicker } from "./session";
 import type {
   ActiveDialogController,
+  ContinueAction,
+  ContinuePreferenceState,
   MiniMode,
-  ModelPreference,
   ModelPreferenceState,
   OverlayState,
   ResolvedModel,
@@ -37,6 +37,7 @@ export default Plugin.define({
       initial: {
         model: null as ResolvedModel | null,
         thinking: config.enableThinking,
+        continueMode: "queue" as ContinueAction,
       },
     });
     let activeDialog: ActiveDialogController | undefined;
@@ -44,14 +45,23 @@ export default Plugin.define({
     let disposed = false;
     const modelPickerOpen = { value: false };
 
+    // A persisted store update is asynchronous. Keep the selection in a local
+    // signal so the picker callback can rerender the model label immediately.
+    const [modelPreferenceValue, setModelPreferenceValue] = createSignal<
+      ResolvedModel | undefined
+    >(preferences.model ?? undefined);
     const modelPreference: ModelPreferenceState = {
-      get: () => preferences.model ?? undefined,
+      get: () => modelPreferenceValue(),
       set: (model) => {
+        setModelPreferenceValue(model ?? undefined);
         void updatePreferences((draft) => {
           draft.model = model ?? null;
         });
       },
     };
+    createEffect(() => {
+      setModelPreferenceValue(preferences.model ?? undefined);
+    });
     const thinkingPreference: ThinkingPreferenceState = {
       get: () => preferences.thinking,
       set: (enabled) => {
@@ -60,24 +70,27 @@ export default Plugin.define({
         });
       },
     };
+    const [continueModeValue, setContinueModeValue] =
+      createSignal<ContinueAction>(
+        preferences.continueMode === "clipboard" ? "clipboard" : "queue",
+      );
+    const continuePreference: ContinuePreferenceState = {
+      get: () => continueModeValue(),
+      set: (mode) => {
+        setContinueModeValue(mode);
+        void updatePreferences((draft) => {
+          draft.continueMode = mode;
+        });
+      },
+    };
+    createEffect(() => {
+      setContinueModeValue(
+        preferences.continueMode === "clipboard" ? "clipboard" : "queue",
+      );
+    });
 
     const updateController = new AbortController();
     startAutoUpdate(ctx, setUpdateWarning, updateController.signal);
-
-    if (config.cleanupStaleSessions) {
-      void cleanupStaleMiniSessions(ctx)
-        .then((removed) => {
-          if (removed === 0) return;
-          ctx.ui.toast.show({
-            variant: "info",
-            message: `Cleaned up ${removed} stale mini session${
-              removed === 1 ? "" : "s"
-            }.`,
-            duration: 3000,
-          });
-        })
-        .catch(() => {});
-    }
 
     const actions: MiniKeybindActions = {
       config,
@@ -100,6 +113,7 @@ export default Plugin.define({
         }
       },
       continueInMainThread: () => overlay()?.onContinue(),
+      toggleContinueMode: () => overlay()?.onToggleContinue(),
       toggleThinking: () => overlay()?.onToggleThinking(),
       changeModelFromPanel: () => {
         modelPickerOpen.value = true;
@@ -192,6 +206,7 @@ export default Plugin.define({
             },
             modelPreference,
             thinkingPreference,
+            continuePreference,
             openPickerFn: (onAfterSelect) =>
               openPicker(sessionID, onAfterSelect),
             getUpdateWarning: () => updateWarning(),

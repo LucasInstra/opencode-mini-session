@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGlobalCommands,
+  buildPanelCommands,
   parseSlashQuestion,
   type MiniKeybindActions,
 } from "../src/keybinds";
@@ -17,8 +18,7 @@ function config(): MiniConfig {
     enableThinking: false,
     toggleThinkingKeybind: "ctrl+t",
     tools: ["read"],
-    continueAction: "queue",
-    cleanupStaleSessions: true,
+    continueKeybind: "ctrl+y",
   };
 }
 
@@ -33,6 +33,7 @@ function actions(
     hideOverlay: vi.fn(),
     closeOverlay: vi.fn(),
     continueInMainThread: vi.fn(),
+    toggleContinueMode: vi.fn(),
     toggleThinking: vi.fn(),
     changeModelFromPanel: vi.fn(),
     scrollBy: vi.fn(),
@@ -88,7 +89,7 @@ describe("global keymap commands", () => {
     ]);
   });
 
-  it("wires the handoff command with the base prompt and extra instructions", () => {
+  it("wires the handoff command with a short visible question", () => {
     const calls: Array<[string, string | undefined, boolean | undefined]> = [];
     const commands = buildGlobalCommands(
       actions((mode, _source, question, handoff) => {
@@ -100,15 +101,44 @@ describe("global keymap commands", () => {
     expect(handoff?.slash).toEqual({ name: "mini-handoff", arguments: true });
 
     handoff?.run?.("/mini-handoff focus on tests");
-    expect(calls[0]?.[0]).toBe("main");
-    expect(calls[0]?.[2]).toBe(true);
-    expect(calls[0]?.[1]).toContain("handoff document");
-    expect(calls[0]?.[1]).toContain(
-      "Additional instructions from the user: focus on tests",
-    );
+    expect(calls[0]).toEqual(["main", "focus on tests", true]);
 
     handoff?.run?.("/mini-handoff");
-    expect(calls[1]?.[1]).toContain("handoff document");
-    expect(calls[1]?.[1]).not.toContain("Additional instructions");
+    expect(calls[1]).toEqual(["main", "Generate a handoff", true]);
+  });
+});
+
+describe("panel keymap commands", () => {
+  it("toggles the continue mode from the configured keybind", () => {
+    const toggleContinueMode = vi.fn();
+    const commands = buildPanelCommands({
+      ...actions(),
+      toggleContinueMode,
+    });
+
+    const toggle = commands.find(
+      (command) => command.id === "mini.toggle-continue",
+    );
+    expect(toggle?.bind).toBe("ctrl+y");
+    toggle?.run?.();
+    expect(toggleContinueMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the continue toggle when the keybind is disabled", () => {
+    const commands = buildPanelCommands({
+      ...actions(),
+      config: config(),
+    });
+    const disabled = buildPanelCommands({
+      ...actions(),
+      config: { ...config(), continueKeybind: false },
+    });
+
+    expect(
+      commands.some((command) => command.id === "mini.toggle-continue"),
+    ).toBe(true);
+    expect(
+      disabled.some((command) => command.id === "mini.toggle-continue"),
+    ).toBe(false);
   });
 });

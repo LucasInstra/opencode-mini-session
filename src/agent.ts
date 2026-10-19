@@ -267,6 +267,9 @@ function buildMiniAgentNotices(
 
 function buildToolSystemNote(tools: string[], directory?: string) {
   const location = directory ? ` The working directory is ${directory}.` : "";
+  if (tools.length === 0) {
+    return `${location} No tools are available in this mini session. Do not attempt to use any tools.`;
+  }
   return `${location} You may only use the following tools: ${tools.join(", ")}. Do not attempt to use any other tools. Prefer the read tool to open files you can name; relative paths resolve from the working directory, and read on a directory lists its entries. Use glob or grep only to locate paths you do not know.`;
 }
 

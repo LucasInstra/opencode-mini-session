@@ -15,9 +15,9 @@ https://github.com/user-attachments/assets/7a668d45-dffc-4311-91fb-1460bf773238
 - **Fresh threads with no copied context** — `alt+n` or `/mini-fresh [question]`
 - **Session handoff** — `/mini-handoff [instructions]` writes a document for a new session and copies it to the clipboard
 - **Streaming answers** with thinking blocks, a model picker, and context/token counters
-- **Read-only by default** — the plugin-managed mini agent only gets `read`, `glob`, `grep` and `webfetch` (add `websearch` with the `tools` option)
+- **Read-only by default** — the plugin-managed mini agent only gets `read`, `glob`, `grep`, `webfetch` and `websearch`
 - **Continue your way** — queue the answer into the main session, or copy it to the clipboard (OSC 52)
-- **Retry** on failure, persisted model/thinking preferences, and automatic cleanup of leaked sessions
+- **Retry** on failure and persisted model, thinking and continue-mode preferences
 
 ## Installation
 
@@ -73,15 +73,16 @@ For V1 configuration and troubleshooting, use the [v1 README](https://github.com
 | `alt+n` (configurable) | Toggle fresh mini session overlay |
 | `/mini [question]` | Open mini session with copied session context, optionally asking immediately |
 | `/mini-fresh [question]` | Open mini session with no copied session context, optionally asking immediately |
-| `/mini-handoff [instructions]` | Write a handoff document from this session and copy it to the clipboard |
+| `/mini-handoff [instructions]` | Write a handoff document from this session (the overlay's **Copy handoff** action copies it) |
 | `/mini-model` | Change model for future mini sessions |
 
 ### Inside the mini session
 
 | Key | Action |
 |---|---|
-| `enter` | Send question / follow-up |
-| `shift+enter` (or `enter` with the input empty) | Continue in the main thread (queues the transcript, or copies it with `continueAction: "clipboard"`) |
+| `enter` | Send question / follow-up (empty input does nothing) |
+| `shift+enter` | Continue in the main thread, or copy the transcript, depending on the current mode |
+| `ctrl+y` (configurable) | Switch between **Continue** (queue) and **Copy** (clipboard); the button label updates immediately and the choice is remembered |
 | `alt+b` or `alt+n` (configurable) | Hide overlay, resumable |
 | `ctrl+t` (configurable) | Toggle thinking blocks |
 | `tab` | Change the model for the next question |
@@ -103,11 +104,10 @@ All options are optional. Defaults are shown below.
 | `freshKeybind` | `string \| false` | `"alt+n"` | Fresh mini-session keybind. Set to `false` or `"none"` to disable. |
 | `enableThinking` | `boolean` | `false` | Show thinking blocks collapsed by default. |
 | `toggleThinkingKeybind` | `string \| false` | `"ctrl+t"` | Thinking toggle keybind inside the mini session. Set to `false` or `"none"` to disable. |
-| `tools` | `string[]` | `["read","glob","grep","webfetch"]` | Read-only permission actions available to the plugin-managed mini agent. Supported: `read`, `glob`, `grep`, `webfetch`, `websearch`. Unknown or write-capable actions are ignored. |
-| `continueAction` | `"queue" \| "clipboard"` | `"queue"` | What `shift+enter` does: queue the transcript into the main session, or copy it to the clipboard (OSC 52, works in most modern terminals). |
-| `cleanupStaleSessions` | `boolean` | `true` | On startup, remove mini sessions left behind by a crashed client (marked sessions older than 12 hours). |
+| `tools` | `string[]` | `["read","glob","grep","webfetch","websearch"]` | Read-only permission actions available to the plugin-managed mini agent. Supported: `read`, `glob`, `grep`, `webfetch`, `websearch`. Unknown or write-capable actions are ignored. An explicit empty list (or one that filters down to nothing) disables all tools. |
+| `continueKeybind` | `string \| false` | `"ctrl+y"` | Toggle between queueing the transcript in the main session and copying it to the clipboard (OSC 52) while the overlay is open. Set to `false` or `"none"` to disable. |
 
-The model chosen with `/mini-model` and the thinking toggle are remembered between restarts (per plugin storage).
+The model chosen with `/mini-model`, the thinking toggle and the continue mode are remembered between restarts (per plugin storage). The handoff mode always uses **Copy handoff**; the toggle only applies to regular mini sessions.
 
 If you want to customize the plugin, your config should look something like this:
 
@@ -125,8 +125,7 @@ If you want to customize the plugin, your config should look something like this
         "enableThinking": true,
         "toggleThinkingKeybind": "alt+a",
         "tools": ["read", "glob", "grep", "webfetch", "websearch"],
-        "continueAction": "clipboard",
-        "cleanupStaleSessions": true,
+        "continueKeybind": "ctrl+y",
         "agent": "build"
       }
     }
@@ -136,7 +135,7 @@ If you want to customize the plugin, your config should look something like this
 
 ## Agents and permissions
 
-If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only permissions: `read`, `glob`, and `grep` plus the web tools configured in `tools` (default `webfetch`). Everything else stays denied, and the mini system prompt tells the model to prefer `read` for files it can name.
+If `agent` is not set or is invalid, mini uses a plugin managed custom mini agent with read only permissions: `read`, `glob`, and `grep` plus the web tools configured in `tools` (default `webfetch` and `websearch`). Everything else stays denied, and the mini system prompt tells the model to prefer `read` for files it can name. Setting `tools` to an explicit empty list denies every tool, including the read actions.
 
 To customize permissions, tone, instructions, or other behavior, set `agent` to an existing OpenCode agent name. The plugin will use that agent's settings directly.
 
@@ -173,8 +172,8 @@ Fresh mini mode skips this copied-context step entirely.
 
 `/mini-handoff` turns the current session into a handoff document for a new session. It opens the mini overlay with the copied session context and asks the model to produce a concise markdown handoff: goal and status, decisions, files and commands, verification done, open questions, and next steps.
 
-- Add extra instructions after the command, for example `/mini-handoff focus on the migration work`.
-- The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52). On terminals that cannot send `shift+enter`, pressing `enter` with the input empty does the same.
+- Add extra instructions after the command, for example `/mini-handoff focus on the migration work`. The overlay shows only those instructions; with none, it shows a short **Generate a handoff** label. The full handoff instructions are attached as a system instruction, not as the user message.
+- The button reads **Copy handoff**; pressing it (or `shift+enter`) copies only the last assistant answer — the document itself, without the question or transcript — through the terminal clipboard (OSC 52). Handoff mode ignores the continue-mode toggle.
 - Clipboard support is required for this mode: if the terminal cannot copy (no OSC 52), the overlay stays open and reports it instead of losing the text.
 - Refine the document with follow-up questions in the same overlay, then copy the final version.
 
@@ -204,7 +203,7 @@ The installed package is the 1.x release, which targets OpenCode 1. Install the 
 
 ### `shift+enter` does not copy or continue
 
-Some terminals cannot distinguish `shift+enter` from `enter` without extended keyboard support. Press `enter` with the input empty to run the same action, or click the button with the mouse. The overlay reports when the terminal cannot copy (no OSC 52) instead of losing the text.
+Some terminals cannot distinguish `shift+enter` from `enter` without extended keyboard support. Click the **Continue**, **Copy** or **Copy handoff** button with the mouse instead. The overlay reports when the terminal cannot copy (no OSC 52) instead of losing the text.
 
 ### Git package installs are refused
 

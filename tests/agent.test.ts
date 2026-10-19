@@ -22,8 +22,7 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     enableThinking: false,
     toggleThinkingKeybind: "ctrl+t",
     tools: [...DEFAULT_ALLOWED_TOOLS],
-    continueAction: "queue",
-    cleanupStaleSessions: true,
+    continueKeybind: "ctrl+y",
     ...overrides,
   };
 }
@@ -109,6 +108,13 @@ describe("config parsing", () => {
   });
 
   it("parses tools with a read-only whitelist", () => {
+    expect(parseConfig({}).tools).toEqual([
+      "read",
+      "glob",
+      "grep",
+      "webfetch",
+      "websearch",
+    ]);
     expect(parseConfig({}).tools).toEqual(DEFAULT_ALLOWED_TOOLS);
     expect(parseConfig({ tools: ["read", "websearch"] }).tools).toEqual([
       "read",
@@ -117,10 +123,8 @@ describe("config parsing", () => {
     expect(
       parseConfig({ tools: ["read", "read", "websearch", "bogus"] }).tools,
     ).toEqual(["read", "websearch"]);
-    expect(parseConfig({ tools: ["edit", "shell"] }).tools).toEqual(
-      DEFAULT_ALLOWED_TOOLS,
-    );
-    expect(parseConfig({ tools: [] }).tools).toEqual(DEFAULT_ALLOWED_TOOLS);
+    expect(parseConfig({ tools: ["edit", "shell"] }).tools).toEqual([]);
+    expect(parseConfig({ tools: [] }).tools).toEqual([]);
     expect(parseConfig({ tools: "read" }).tools).toEqual(DEFAULT_ALLOWED_TOOLS);
   });
 
@@ -136,18 +140,15 @@ describe("config parsing", () => {
     expect(parseConfig({ tokenLimit: "100" }).tokenLimit).toBe(50_000);
   });
 
-  it("parses continueAction and cleanupStaleSessions", () => {
-    expect(parseConfig({}).continueAction).toBe("queue");
-    expect(parseConfig({ continueAction: "clipboard" }).continueAction).toBe(
-      "clipboard",
+  it("parses the continue mode keybind", () => {
+    expect(parseConfig({}).continueKeybind).toBe("ctrl+y");
+    expect(parseConfig({ continueKeybind: " ctrl+u " }).continueKeybind).toBe(
+      "ctrl+u",
     );
-    expect(parseConfig({ continueAction: "bogus" }).continueAction).toBe(
-      "queue",
+    expect(parseConfig({ continueKeybind: false }).continueKeybind).toBe(false);
+    expect(parseConfig({ continueKeybind: "none" }).continueKeybind).toBe(
+      false,
     );
-    expect(parseConfig({}).cleanupStaleSessions).toBe(true);
-    expect(
-      parseConfig({ cleanupStaleSessions: false }).cleanupStaleSessions,
-    ).toBe(false);
   });
 });
 
@@ -207,9 +208,20 @@ describe("plugin-managed permissions", () => {
     for (const action of DEFAULT_ALLOWED_TOOLS) {
       expect(effectFor(resolved.permission, action)).toBe("allow");
     }
-    for (const action of ["edit", "shell", "subagent", "websearch"]) {
+    expect(effectFor(resolved.permission, "websearch")).toBe("allow");
+    for (const action of ["edit", "shell", "subagent"]) {
       expect(effectFor(resolved.permission, action)).toBe("deny");
     }
+  });
+
+  it("denies every tool when the allowlist is explicitly empty", () => {
+    const resolved = asPluginManaged(resolveMiniAgent(config({ tools: [] }), []));
+
+    expect(effectFor(resolved.permission, "read")).toBe("deny");
+    expect(effectFor(resolved.permission, "websearch")).toBe("deny");
+    const prompt = buildMiniSystemPrompt("", resolved);
+    expect(prompt).toContain("No tools are available in this mini session.");
+    expect(prompt).not.toContain("You may only use the following tools");
   });
 
   it("uses configured tools for permissions and system prompts", () => {

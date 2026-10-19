@@ -1,5 +1,6 @@
 import {
   DEFAULT_ALLOWED_TOOLS,
+  DEFAULT_CONTINUE_KEYBIND,
   DEFAULT_FRESH_KEYBIND,
   DEFAULT_FULL_TOKEN_LIMIT,
   DEFAULT_KEYBIND,
@@ -30,9 +31,10 @@ export function parseConfig(options: unknown): MiniConfig {
       DEFAULT_TOGGLE_THINKING_KEYBIND,
     ),
     tools: parseTools(input.tools),
-    continueAction:
-      input.continueAction === "clipboard" ? "clipboard" : "queue",
-    cleanupStaleSessions: input.cleanupStaleSessions !== false,
+    continueKeybind: parseKeybind(
+      input.continueKeybind,
+      DEFAULT_CONTINUE_KEYBIND,
+    ),
   };
 }
 
@@ -67,5 +69,5 @@ function parseTools(value: unknown): string[] {
     ),
   ];
 
-  return tools.length > 0 ? tools : [...DEFAULT_ALLOWED_TOOLS];
+  return tools;
 }

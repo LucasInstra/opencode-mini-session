@@ -15,8 +15,7 @@ export type MiniConfig = {
   enableThinking: boolean;
   toggleThinkingKeybind: string | false;
   tools: string[];
-  continueAction: ContinueAction;
-  cleanupStaleSessions: boolean;
+  continueKeybind: string | false;
 };
 
 export type MiniMode = "main" | "fresh";
@@ -62,6 +61,11 @@ export type ModelPreferenceState = {
 export type ThinkingPreferenceState = {
   get: () => boolean;
   set: (enabled: boolean) => void;
+};
+
+export type ContinuePreferenceState = {
+  get: () => ContinueAction;
+  set: (action: ContinueAction) => void;
 };
 
 export type ActiveDialog = {
@@ -114,7 +118,7 @@ export type AnswerDialogProps = {
   onClose: () => void;
   onContinue: () => void;
   onRetry: () => void;
-  onEmptySubmit?: () => void;
+  onToggleContinue: () => void;
   onChangeModel: () => void;
   onToggleThinking: () => void;
   onToggleThinkingPart: (partID: string) => void;

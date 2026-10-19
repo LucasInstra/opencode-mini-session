@@ -13,10 +13,11 @@ import {
   CMD_SCROLL_DOWN,
   CMD_SCROLL_TOP,
   CMD_SCROLL_UP,
+  CMD_TOGGLE_CONTINUE,
   CMD_TOGGLE_FRESH,
   CMD_TOGGLE_MAIN,
   CMD_TOGGLE_THINKING,
-  HANDOFF_PROMPT,
+  HANDOFF_QUESTION,
   SCROLL_LINE_DELTA,
   SCROLL_PAGE_DELTA,
 } from "./constants";
@@ -35,6 +36,7 @@ export type MiniKeybindActions = {
   hideOverlay: () => void;
   closeOverlay: () => void;
   continueInMainThread: () => void;
+  toggleContinueMode: () => void;
   toggleThinking: () => void;
   changeModelFromPanel: () => void;
   scrollBy: (delta: number) => void;
@@ -56,11 +58,8 @@ export function parseSlashQuestion(
   return question ? question : undefined;
 }
 
-function buildHandoffPrompt(input: string | undefined) {
-  const extra = parseSlashQuestion(input, "mini-handoff");
-  return extra
-    ? `${HANDOFF_PROMPT}\n\nAdditional instructions from the user: ${extra}`
-    : HANDOFF_PROMPT;
+function buildHandoffQuestion(input: string | undefined) {
+  return parseSlashQuestion(input, "mini-handoff") ?? HANDOFF_QUESTION;
 }
 
 export function buildGlobalCommands(
@@ -143,7 +142,7 @@ export function buildGlobalCommands(
       slash: { name: "mini-handoff", arguments: true },
       enabled: onSession,
       run: (input) =>
-        triggerMiniMode("main", "command", buildHandoffPrompt(input), true),
+        triggerMiniMode("main", "command", buildHandoffQuestion(input), true),
     },
   ];
 }
@@ -181,6 +180,17 @@ export function buildPanelCommands(
       bind: "shift+return",
       run: () => actions.continueInMainThread(),
     },
+    ...(config.continueKeybind
+      ? [
+          {
+            id: CMD_TOGGLE_CONTINUE,
+            title: "Toggle mini continue action",
+            group: "Mini session",
+            bind: config.continueKeybind,
+            run: () => actions.toggleContinueMode(),
+          } satisfies KeymapCommand,
+        ]
+      : []),
     ...(config.toggleThinkingKeybind
       ? [
           {

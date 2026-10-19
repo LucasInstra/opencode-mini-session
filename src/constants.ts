@@ -9,6 +9,7 @@ export const CMD_CLOSE = "mini.close";
 export const CMD_CONTINUE = "mini.continue";
 export const CMD_CHANGE_MODEL = "mini.change-model";
 export const CMD_TOGGLE_THINKING = "mini.toggle-thinking";
+export const CMD_TOGGLE_CONTINUE = "mini.toggle-continue";
 export const CMD_SCROLL_UP = "mini.scroll-up";
 export const CMD_SCROLL_DOWN = "mini.scroll-down";
 export const CMD_PAGE_UP = "mini.page-up";
@@ -24,6 +25,7 @@ export const DEFAULT_FULL_TOKEN_LIMIT = 50_000;
 export const DEFAULT_KEYBIND = "alt+b";
 export const DEFAULT_FRESH_KEYBIND = "alt+n";
 export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
+export const DEFAULT_CONTINUE_KEYBIND = "ctrl+y";
 
 /**
  * Permission actions the mini agent may be granted. The list is deliberately
@@ -43,17 +45,19 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   "glob",
   "grep",
   "webfetch",
+  "websearch",
 ];
 
-/** Session metadata marker used to identify (and clean up) ephemeral mini sessions. */
+/** Session metadata marker used to identify ephemeral mini sessions. */
 export const MINI_SESSION_METADATA_KEY = "opencodeMiniSession";
 
-/** Mini sessions older than this are treated as leaked by a crashed client. */
-export const STALE_MINI_SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** Short user-facing question for `/mini-handoff`; the full prompt is internal. */
+export const HANDOFF_QUESTION = "Generate a handoff";
 
 /**
- * Initial question for `/mini-handoff`: turns the copied session context into a
- * document that can be pasted into a fresh session.
+ * Instructions for `/mini-handoff`: turns the copied session context into a
+ * document that can be pasted into a fresh session. Sent as a system
+ * instruction so the overlay does not display it as the user's message.
  */
 export const HANDOFF_PROMPT =
   "You are summarizing an existing work session into a handoff document, so the work can continue in a new session with no memory of this conversation. Write the handoff from the copied session context only; do not investigate the workspace and do not call tools. If the context is empty or insufficient, say so briefly instead of guessing. Produce a concise markdown handoff with: goal and current status, key decisions and why, files/paths/commands involved, verification already done and its result, open questions, and next concrete steps. Reply with the handoff document only, in the same language as the session context; do not add an introduction or a closing comment.";

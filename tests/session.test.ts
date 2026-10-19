@@ -28,8 +28,9 @@ vi.mock("../src/context", () => ({
 
 import {
   openMiniSession,
+  openModelPicker,
   startQuestion,
-  clampInstructionValue,
+  clampContextText,
   type MiniSessionOptions,
 } from "../src/session";
 import type {
@@ -68,9 +69,8 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     freshKeybind: "alt+n",
     enableThinking: false,
     toggleThinkingKeybind: "ctrl+t",
-    tools: ["read", "glob", "grep", "webfetch"],
-    continueAction: "queue",
-    cleanupStaleSessions: true,
+    tools: ["read", "glob", "grep", "webfetch", "websearch"],
+    continueKeybind: "ctrl+y",
     ...overrides,
   };
 }
@@ -118,6 +118,12 @@ function fakeCtx() {
   } as any;
 }
 
+function dialogCtx(selection: unknown) {
+  const ctx = fakeCtx();
+  ctx.ui.dialog = { select: vi.fn(async () => selection) };
+  return ctx;
+}
+
 function startOptions(
   overrides: Partial<MiniSessionOptions> = {},
 ): MiniSessionOptions {
@@ -130,6 +136,7 @@ function startOptions(
     active: { get: () => undefined, set: vi.fn() },
     modelPreference: { get: () => undefined, set: vi.fn() },
     thinkingPreference: { get: () => false, set: vi.fn() },
+    continuePreference: { get: () => "queue", set: vi.fn() },
     openPickerFn: vi.fn(),
     ...overrides,
   };
@@ -777,7 +784,7 @@ describe("startQuestion", () => {
     expect(overlay.get()?.state.error).toBeUndefined();
   });
 
-  it("copies the transcript to the clipboard in clipboard mode", async () => {
+  it("toggles between queue and clipboard and remembers the mode", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
 
@@ -787,18 +794,23 @@ describe("startQuestion", () => {
       assistantEntry({ id: "assistant-1", text: "answer" }),
     ]);
     const overlay = captureOverlay();
+    const setContinueMode = vi.fn();
 
     await startQuestion(
       startOptions({
         ctx,
-        config: config({ continueAction: "clipboard" }),
         setOverlay: overlay.set,
+        continuePreference: { get: () => "queue", set: setContinueMode },
       }),
     );
 
+    expect(overlay.get()?.continueLabel).toBe("Continue");
+    overlay.get()?.onToggleContinue();
+    expect(overlay.get()?.continueLabel).toBe("Copy");
+    expect(setContinueMode).toHaveBeenLastCalledWith("clipboard");
+
     handlers["session.idle"]({ data: { sessionID: "mini-session" } });
     await flushMicrotasks();
-    expect(overlay.get()?.continueLabel).toBe("Copy");
 
     overlay.get()?.onContinue();
     await flushMicrotasks();
@@ -810,6 +822,47 @@ describe("startQuestion", () => {
     expect(ctx.ui.toast.show).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Side answer copied to clipboard." }),
     );
+  });
+
+  it("starts in the remembered clipboard mode", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        continuePreference: { get: () => "clipboard", set: vi.fn() },
+      }),
+    );
+
+    expect(overlay.get()?.continueLabel).toBe("Copy");
+  });
+
+  it("keeps the handoff action fixed on Copy handoff", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+    const setContinueMode = vi.fn();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "Generate a handoff",
+        continuePreference: { get: () => "queue", set: setContinueMode },
+      }),
+    );
+
+    overlay.get()?.onToggleContinue();
+    expect(overlay.get()?.continueLabel).toBe("Copy handoff");
+    expect(setContinueMode).not.toHaveBeenCalled();
   });
 
   it("copies only the last assistant answer in handoff mode", async () => {
@@ -920,14 +973,168 @@ describe("startQuestion", () => {
     expect(ctx.client.session.prompt).not.toHaveBeenCalled();
   });
 
-  it("clamps oversized instruction values", () => {
-    const clamped = clampInstructionValue("x".repeat(300_000));
+  it("keeps the newest multibyte context when clamping", () => {
+    const context = `${"旧".repeat(200_000)}\n\nuser:\nnewest message 最新`;
+    const clamped = clampContextText(context, 1000);
 
-    expect(clamped).toContain(
-      "[Session context truncated to fit the instruction limit.]",
+    expect(new TextEncoder().encode(clamped).length).toBeLessThanOrEqual(1000);
+    expect(clamped).toContain("newest message 最新");
+    expect(clamped).toContain("[Older session context truncated");
+    expect(clamped).not.toContain("\uFFFD");
+
+    const single = `header\n\n${"旧".repeat(1000)}TAIL`;
+    const tailClamped = clampContextText(single, 500);
+    expect(
+      new TextEncoder().encode(tailClamped).length,
+    ).toBeLessThanOrEqual(500);
+    expect(tailClamped).toContain("TAIL");
+    expect(tailClamped).not.toContain("\uFFFD");
+
+    expect(clampContextText("small", 1000)).toBe("small");
+  });
+
+  it("keeps the preamble and delimiters when the context is oversized", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    buildCopiedContext.mockReturnValueOnce({
+      text: `${"old context ".repeat(30_000)}\n\nassistant:\nNEWEST MESSAGE`,
+      usedTokens: 50_000,
+      totalAvailableTokens: 60_000,
+    });
+
+    const ctx = fakeCtx();
+    await startQuestion(startOptions({ ctx }));
+
+    const value = (
+      ctx.client.session.instructions.entry.put.mock.calls[0]?.[0] as any
+    )?.value as string;
+    expect(value).toContain("You are answering a quick side question");
+    expect(value).toContain("<session-context>");
+    expect(value).toContain("</session-context>");
+    expect(value).toContain("NEWEST MESSAGE");
+    expect(value).toContain("[Older session context truncated");
+    expect(new TextEncoder().encode(value).length).toBeLessThanOrEqual(
+      250_000,
     );
-    expect(new TextEncoder().encode(clamped).length).toBeLessThan(300_000);
-    expect(clampInstructionValue("small")).toBe("small");
+  });
+
+  it("sends the handoff instructions as system context, not as the user message", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "focus on tests",
+      }),
+    );
+    await flushMicrotasks();
+
+    const instructions = (
+      ctx.client.session.instructions.entry.put.mock.calls[0]?.[0] as any
+    )?.value as string;
+    expect(instructions).toContain(
+      "You are summarizing an existing work session into a handoff document",
+    );
+    expect(ctx.client.session.prompt).toHaveBeenCalledWith({
+      sessionID: "mini-session",
+      text: "focus on tests",
+    });
+    expect(ctx.client.session.prompt).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("You are summarizing an existing"),
+      }),
+    );
+  });
+
+  it("falls back when the persisted model is no longer available", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+    let preference: any = {
+      model: { providerID: "openai", modelID: "gone" },
+    };
+    const setModel = vi.fn((next: any) => {
+      preference = next;
+    });
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        modelPreference: { get: () => preference, set: setModel },
+      }),
+    );
+
+    expect(setModel).toHaveBeenCalledWith(undefined);
+    expect(overlay.get()?.modelName).toBe("anthropic/claude-sonnet-4.6");
+    expect(overlay.get()?.state.notice).toContain("no longer available");
+  });
+
+  it("falls back when the persisted variant is no longer available", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+    let preference: any = {
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4.6" },
+      variant: "missing",
+    };
+    const setModel = vi.fn((next: any) => {
+      preference = next;
+    });
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        modelPreference: { get: () => preference, set: setModel },
+      }),
+    );
+
+    expect(setModel).toHaveBeenCalledWith(undefined);
+    expect(overlay.get()?.modelName).toBe("anthropic/claude-sonnet-4.6");
+    expect(overlay.get()?.state.notice).toContain("no longer available");
+  });
+
+  it("reflects the selected model before the rerender callback", async () => {
+    const ctx = dialogCtx({
+      type: "model",
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4.6" },
+      variant: "fast",
+    });
+    let selected: any;
+    const modelPreference = {
+      get: () => selected,
+      set: (next: any) => {
+        selected = next;
+      },
+    };
+    let seenDuringRerender: any;
+
+    await openModelPicker(
+      ctx,
+      config(),
+      "session-1",
+      modelPreference,
+      () => {
+        seenDuringRerender = modelPreference.get();
+      },
+    );
+    await flushMicrotasks();
+
+    expect(seenDuringRerender).toEqual({
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4.6" },
+      variant: "fast",
+    });
   });
 
   it("aborts before creating a session when the plugin is disposed", async () => {
@@ -940,33 +1147,6 @@ describe("startQuestion", () => {
 
     expect(ctx.client.session.create).not.toHaveBeenCalled();
     expect(ctx.data.on).not.toHaveBeenCalled();
-  });
-
-  it("exposes an empty-submit copy action only for copy modes", async () => {
-    vi.useFakeTimers();
-    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
-
-    const ctx = fakeCtx();
-
-    const handoffOverlay = captureOverlay();
-    await startQuestion(
-      startOptions({ ctx, setOverlay: handoffOverlay.set, handoff: true }),
-    );
-    expect(typeof handoffOverlay.get()?.onEmptySubmit).toBe("function");
-
-    const queueOverlay = captureOverlay();
-    await startQuestion(startOptions({ ctx, setOverlay: queueOverlay.set }));
-    expect(queueOverlay.get()?.onEmptySubmit).toBeUndefined();
-
-    const clipboardOverlay = captureOverlay();
-    await startQuestion(
-      startOptions({
-        ctx,
-        config: config({ continueAction: "clipboard" }),
-        setOverlay: clipboardOverlay.set,
-      }),
-    );
-    expect(typeof clipboardOverlay.get()?.onEmptySubmit).toBe("function");
   });
 
   it("warns when continuing while a response is still loading", async () => {
@@ -1022,8 +1202,8 @@ describe("startQuestion", () => {
     await startQuestion(
       startOptions({
         ctx,
-        config: config({ continueAction: "clipboard" }),
         setOverlay: overlay.set,
+        continuePreference: { get: () => "clipboard", set: vi.fn() },
       }),
     );
 

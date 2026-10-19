@@ -2,24 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "solid-js";
 
 const {
-  cleanupStaleMiniSessions,
   createOverlaySlot,
   openMiniSession,
   openModelPicker,
   startAutoUpdate,
 } = vi.hoisted(() => ({
-  cleanupStaleMiniSessions: vi.fn(async () => 0),
   createOverlaySlot: vi.fn((_options: unknown) => () => {}),
   openMiniSession: vi.fn((_options: unknown) => true),
   openModelPicker: vi.fn((..._args: unknown[]) => undefined),
   startAutoUpdate: vi.fn((..._args: unknown[]) => undefined),
 }));
-
-vi.mock("../src/cleanup", async () => {
-  const actual =
-    await vi.importActual<typeof import("../src/cleanup")>("../src/cleanup");
-  return { ...actual, cleanupStaleMiniSessions };
-});
 
 vi.mock("../src/update", async () => {
   const actual =
@@ -92,8 +84,6 @@ function slotOptions(ctx: ReturnType<typeof fakeCtx>) {
 }
 
 afterEach(() => {
-  cleanupStaleMiniSessions.mockClear();
-  cleanupStaleMiniSessions.mockResolvedValue(0);
   createOverlaySlot.mockClear();
   openMiniSession.mockClear();
   openMiniSession.mockReturnValue(true);
@@ -132,24 +122,46 @@ describe("plugin setup", () => {
     expect(signal.aborted).toBe(true);
   });
 
-  it("cleans up stale sessions and reports the removal count", async () => {
-    cleanupStaleMiniSessions.mockResolvedValueOnce(2);
+  it("updates the model preference before the storage write completes", async () => {
     const ctx = fakeCtx();
+    ctx.storage.store = vi.fn((_key: string, initial: { initial: any }) => {
+      const value = JSON.parse(JSON.stringify(initial.initial));
+      return [
+        value,
+        async (mutation: (draft: any) => void) => {
+          await Promise.resolve();
+          mutation(value);
+        },
+      ];
+    });
     await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
 
-    expect(cleanupStaleMiniSessions).toHaveBeenCalledWith(ctx);
-    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Cleaned up 2 stale mini sessions.",
-      }),
-    );
+    actions.openModelPicker();
+    const modelPreference = (openModelPicker.mock.calls[0]?.[3] ?? {}) as any;
+    const selection = {
+      model: { providerID: "anthropic", modelID: "claude-sonnet-4.6" },
+      variant: "fast",
+    };
+
+    modelPreference.set(selection);
+
+    expect(modelPreference.get()).toEqual(selection);
   });
 
-  it("skips the stale cleanup when disabled", async () => {
-    const ctx = fakeCtx({ cleanupStaleSessions: false });
+  it("passes a remembered continue mode to new mini sessions", async () => {
+    const ctx = fakeCtx();
     await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
 
-    expect(cleanupStaleMiniSessions).not.toHaveBeenCalled();
+    actions.triggerMiniMode("main", "command");
+    await Promise.resolve();
+    const options = (openMiniSession.mock.calls[0]?.[0] as any) ?? {};
+    expect(options.continuePreference.get()).toBe("queue");
+
+    options.continuePreference.set("clipboard");
+    await Promise.resolve();
+    expect(options.continuePreference.get()).toBe("clipboard");
   });
 
   it("persists model and thinking preferences through storage", async () => {

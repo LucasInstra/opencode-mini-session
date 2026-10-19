@@ -1,5 +1,5 @@
 import type { ModelInfo, ProviderInfo } from "@opencode/client";
-import type { ResolvedModel, SessionEntry } from "./types";
+import type { ModelPreference, ResolvedModel, SessionEntry } from "./types";
 
 export type ModelSource = "config" | "session" | "default" | "unknown";
 
@@ -72,6 +72,25 @@ export function resolveDefaultModel(
   return {
     ...resolveModel(null, null, entries, fallbackModel),
     notice: `Configured mini model ${formatResolvedModel(resolved.model)} was not found. The main session model will be used.`,
+  };
+}
+
+/**
+ * A model selected in the picker is persisted across restarts. Providers can
+ * remove models or variants, so verify the saved preference before using it and
+ * fall back to the default model instead of failing every prompt.
+ */
+export function resolveModelPreference(
+  models: ModelInfo[],
+  preference: ModelPreference,
+): { preference: ModelPreference; notice?: string } {
+  if (!preference?.model) return { preference };
+  if (models.length === 0) return { preference };
+  if (isAvailableModel(models, preference)) return { preference };
+
+  return {
+    preference: undefined,
+    notice: `Saved mini model ${formatResolvedModel(preference)} is no longer available. The default model will be used.`,
   };
 }
 

@@ -13,17 +13,20 @@ import {
   type ResolvedMiniAgent,
 } from "./agent";
 import { buildCopiedContext, getSessionEntries } from "./context";
-import { MINI_SESSION_METADATA_KEY } from "./constants";
+import { HANDOFF_PROMPT, MINI_SESSION_METADATA_KEY } from "./constants";
 import { getErrorMessage } from "./diagnostics";
 import {
   resolveDefaultModel,
   formatResolvedModel,
   resolveModelContextWindow,
+  resolveModelPreference,
 } from "./model";
 import { getCurrentRoute, type TuiContext } from "./opencode";
 import type {
   ActiveDialog,
   AnswerDialogState,
+  ContinueAction,
+  ContinuePreferenceState,
   MiniConfig,
   MiniMode,
   ModelPreference,
@@ -49,19 +52,53 @@ type ErrorPath =
 const SYSTEM_INSTRUCTION_KEY = "mini.system";
 
 /**
- * The server rejects instruction entries larger than 256 KiB. Clamp ours below
- * that so a large copied context degrades into a truncated entry instead of a
- * failed `put` (which would drop the whole mini instruction).
+ * The server rejects instruction entries larger than 256 KiB. Keep the
+ * instruction below that limit while preserving the system preamble, the
+ * context delimiters and the newest session messages.
  */
 export const MAX_INSTRUCTION_BYTES = 250_000;
 
-export function clampInstructionValue(value: string) {
+const TRUNCATION_NOTICE =
+  "[Older session context truncated to fit the instruction limit.]";
+
+export function clampContextText(context: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  if (utf8Bytes(context) <= maxBytes) return context;
+
+  const notice = `${TRUNCATION_NOTICE}\n\n`;
+  const noticeBytes = utf8Bytes(notice);
+  if (noticeBytes >= maxBytes) return takeUtf8Tail(notice, maxBytes);
+
+  const budget = maxBytes - noticeBytes;
+  const chunks = context.split("\n\n");
+  const kept: string[] = [];
+  let usedBytes = 0;
+
+  for (let index = chunks.length - 1; index >= 0; index -= 1) {
+    const chunk = chunks[index];
+    const separatorBytes = kept.length > 0 ? 2 : 0;
+    const chunkBytes = utf8Bytes(chunk) + separatorBytes;
+    if (kept.length > 0 && usedBytes + chunkBytes > budget) break;
+    kept.push(chunk);
+    usedBytes += chunkBytes;
+  }
+
+  const text = kept.reverse().join("\n\n");
+  const tail = utf8Bytes(text) > budget ? takeUtf8Tail(text, budget) : text;
+  return `${notice}${tail}`;
+}
+
+function utf8Bytes(value: string) {
+  return new TextEncoder().encode(value).length;
+}
+
+function takeUtf8Tail(value: string, maxBytes: number) {
+  if (maxBytes <= 0) return "";
   const bytes = new TextEncoder().encode(value);
-  if (bytes.length <= MAX_INSTRUCTION_BYTES) return value;
-  const truncated = new TextDecoder().decode(
-    bytes.slice(0, MAX_INSTRUCTION_BYTES),
-  );
-  return `${truncated}\n\n[Session context truncated to fit the instruction limit.]`;
+  if (bytes.length <= maxBytes) return value;
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1;
+  return new TextDecoder().decode(bytes.slice(start));
 }
 
 export type MiniSessionOptions = {
@@ -73,6 +110,7 @@ export type MiniSessionOptions = {
   active: ActiveDialog;
   modelPreference: ModelPreferenceState;
   thinkingPreference: ThinkingPreferenceState;
+  continuePreference: ContinuePreferenceState;
   openPickerFn: (onAfterSelect: () => void) => void;
   getUpdateWarning?: () => string | undefined;
   initialQuestion?: string;
@@ -112,6 +150,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     active,
     modelPreference,
     thinkingPreference,
+    continuePreference,
     openPickerFn,
     getUpdateWarning,
     initialQuestion,
@@ -139,6 +178,11 @@ export async function startQuestion(options: MiniSessionOptions) {
     entries,
     defaultModelResult,
   );
+  const modelPreferenceResolution = resolveModelPreference(
+    models,
+    modelPreference.get(),
+  );
+  if (modelPreferenceResolution.notice) modelPreference.set(undefined);
   const getResolvedModel = () =>
     modelPreference.get() ?? defaultResolvedModel.model;
   const getModelName = () => formatResolvedModel(getResolvedModel());
@@ -150,12 +194,15 @@ export async function startQuestion(options: MiniSessionOptions) {
     : mode === "fresh"
       ? "mini fresh"
       : "mini session";
-  const continueLabel = handoffMode
-    ? "Copy handoff"
-    : config.continueAction === "clipboard"
-      ? "Copy"
-      : "Continue";
-  const copiesToClipboard = handoffMode || config.continueAction === "clipboard";
+  let continueMode: ContinueAction = continuePreference.get();
+  const getContinueLabel = () =>
+    handoffMode
+      ? "Copy handoff"
+      : continueMode === "clipboard"
+        ? "Copy"
+        : "Continue";
+  const getContinueMode = (): ContinueAction =>
+    handoffMode ? "clipboard" : continueMode;
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
@@ -410,13 +457,13 @@ export async function startQuestion(options: MiniSessionOptions) {
     continuing = true;
 
     try {
-      if (handoffMode || config.continueAction === "clipboard") {
+      if (getContinueMode() === "clipboard") {
         if (!copyTextToClipboard(ctx, text)) {
           ctx.ui.toast.show({
             variant: "error",
             message: handoffMode
               ? "Clipboard is not supported by this terminal; the handoff was not copied."
-              : 'Clipboard is not supported by this terminal. Use continueAction "queue" or copy from the transcript.',
+              : "Clipboard is not supported by this terminal; the side answer was not copied.",
           });
           return;
         }
@@ -487,6 +534,13 @@ export async function startQuestion(options: MiniSessionOptions) {
     renderOverlay();
   };
 
+  const toggleContinueMode = () => {
+    if (closed || handoffMode) return;
+    continueMode = continueMode === "clipboard" ? "queue" : "clipboard";
+    continuePreference.set(continueMode);
+    renderOverlay();
+  };
+
   const renderOverlay = (options: { focusInput?: boolean } = {}) => {
     if (closed) return;
     syncCounterState();
@@ -515,7 +569,7 @@ export async function startQuestion(options: MiniSessionOptions) {
       modelName: getModelName(),
       hideKey,
       toggleThinkingKeybind: config.toggleThinkingKeybind,
-      continueLabel,
+      continueLabel: getContinueLabel(),
       continueOnError: handoffMode,
       state: dialogState,
       onScroller: (scroller) => {
@@ -528,9 +582,7 @@ export async function startQuestion(options: MiniSessionOptions) {
       onClose: () => void closeFromUser(),
       onContinue: () => void continueInMainThread(),
       onRetry: retryLastPrompt,
-      onEmptySubmit: copiesToClipboard
-        ? () => void continueInMainThread()
-        : undefined,
+      onToggleContinue: toggleContinueMode,
       onChangeModel: () =>
         openPickerFn(() => renderOverlay({ focusInput: true })),
       onToggleThinking: toggleThinking,
@@ -592,14 +644,31 @@ export async function startQuestion(options: MiniSessionOptions) {
   }
 
   if (disposed()) return;
-  system = buildMiniSystemPrompt(
-    context,
-    resolvedAgent,
-    mode,
-    ctx.location?.directory,
-  );
+  const buildSystemPrompt = (contextText: string) => {
+    const base = buildMiniSystemPrompt(
+      contextText,
+      resolvedAgent,
+      mode,
+      ctx.location?.directory,
+    );
+    return handoffMode ? `${base}\n\n${HANDOFF_PROMPT}` : base;
+  };
+  system = buildSystemPrompt(context);
+  if (utf8Bytes(system) > MAX_INSTRUCTION_BYTES) {
+    const base = buildSystemPrompt("");
+    const head = "\n\n<session-context>\n";
+    const tail = "\n</session-context>";
+    const budget =
+      MAX_INSTRUCTION_BYTES -
+      utf8Bytes(base) -
+      utf8Bytes(head) -
+      utf8Bytes(tail);
+    const clampedContext = clampContextText(context, budget);
+    system = clampedContext ? buildSystemPrompt(clampedContext) : base;
+  }
   dialogState.notice = formatMiniNotice(
     defaultResolvedModel.notice,
+    modelPreferenceResolution.notice,
     ...resolvedAgent.notices,
   );
   renderOverlay();
@@ -697,7 +766,7 @@ export async function startQuestion(options: MiniSessionOptions) {
         await ctx.client.session.instructions.entry.put({
           sessionID: ephemeralSessionID,
           key: SYSTEM_INSTRUCTION_KEY,
-          value: clampInstructionValue(system),
+          value: system,
         });
       } catch (cause) {
         if (closed) return;
