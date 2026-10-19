@@ -45,23 +45,38 @@ export default Plugin.define({
     let disposed = false;
     const modelPickerOpen = { value: false };
 
-    // A persisted store update is asynchronous. Keep the selection in a local
-    // signal so the picker callback can rerender the model label immediately.
-    const [modelPreferenceValue, setModelPreferenceValue] = createSignal<
-      ResolvedModel | undefined
-    >(preferences.model ?? undefined);
+    const [pendingModel, setPendingModel] = createSignal<ResolvedModel | null>();
+    let modelWrite = Promise.resolve();
+    let modelWriteGeneration = 0;
     const modelPreference: ModelPreferenceState = {
-      get: () => modelPreferenceValue(),
+      get: () => {
+        const pending = pendingModel();
+        if (pending !== undefined) return pending ?? undefined;
+        const saved = preferences.model;
+        return saved
+          ? { ...saved, model: saved.model ? { ...saved.model } : undefined }
+          : undefined;
+      },
       set: (model) => {
-        setModelPreferenceValue(model ?? undefined);
-        void updatePreferences((draft) => {
-          draft.model = model ?? null;
-        });
+        const generation = ++modelWriteGeneration;
+        setPendingModel(model ?? null);
+        modelWrite = modelWrite
+          .then(() =>
+            updatePreferences((draft) => {
+              draft.model = model ?? null;
+            }),
+          )
+          .then(() => {
+            if (generation === modelWriteGeneration) setPendingModel(undefined);
+          })
+          .catch(() => {
+            ctx.ui.toast.show({
+              variant: "warning",
+              message: "Failed to save mini model preference.",
+            });
+          });
       },
     };
-    createEffect(() => {
-      setModelPreferenceValue(preferences.model ?? undefined);
-    });
     const thinkingPreference: ThinkingPreferenceState = {
       get: () => preferences.thinking,
       set: (enabled) => {

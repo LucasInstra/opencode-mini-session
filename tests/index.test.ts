@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRoot } from "solid-js";
+import { createEffect, createRoot } from "solid-js";
+import { createStore, reconcile, unwrap } from "solid-js/store";
+import type { ResolvedModel } from "../src/types";
 
 const {
   createOverlaySlot,
@@ -83,6 +85,37 @@ function slotOptions(ctx: ReturnType<typeof fakeCtx>) {
   return ctx.ui.slot.mock.calls[0]?.[0];
 }
 
+function controlledPreferences(
+  ctx: ReturnType<typeof fakeCtx>,
+  initialModel: ResolvedModel | null = null,
+) {
+  const [preferences, setPreferences] = createStore({
+    model: initialModel,
+    thinking: false,
+    continueMode: "queue",
+  });
+  const writes: Array<() => void> = [];
+  const failures: Array<() => void> = [];
+  ctx.storage.store = vi.fn(() => [
+    preferences,
+    (mutation: (draft: typeof preferences) => void) =>
+      new Promise<void>((resolve, reject) => {
+        failures.push(() => reject(new Error("storage unavailable")));
+        writes.push(() => {
+          const draft = structuredClone(unwrap(preferences));
+          mutation(draft);
+          setPreferences(reconcile(structuredClone(draft)));
+          resolve();
+        });
+      }),
+  ]);
+  return { preferences, setPreferences, writes, failures };
+}
+
+async function flushPreferences() {
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+}
+
 afterEach(() => {
   createOverlaySlot.mockClear();
   openMiniSession.mockClear();
@@ -147,6 +180,133 @@ describe("plugin setup", () => {
     modelPreference.set(selection);
 
     expect(modelPreference.get()).toEqual(selection);
+  });
+
+  it("keeps the latest model selection while earlier writes complete", async () => {
+    const ctx = fakeCtx();
+    const storage = controlledPreferences(ctx);
+    const { cleanup, disposeRoot } = await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
+    actions.openModelPicker();
+    const preference = openModelPicker.mock.calls[0]?.[3] as any;
+    const first = { model: { providerID: "provider", modelID: "first" } };
+    const latest = { model: { providerID: "provider", modelID: "latest" } };
+
+    preference.set(first);
+    preference.set(latest);
+    expect(preference.get()).toEqual(latest);
+    await flushPreferences();
+    expect(storage.writes).toHaveLength(1);
+
+    storage.writes[0]();
+    await flushPreferences();
+    expect(preference.get()).toEqual(latest);
+    expect(storage.writes).toHaveLength(2);
+
+    storage.writes[1]();
+    await flushPreferences();
+    expect(preference.get()).toEqual(latest);
+    expect(storage.preferences.model).toEqual(latest);
+    cleanup();
+    disposeRoot();
+  });
+
+  it("follows reconciled model fields after a local selection is saved", async () => {
+    const ctx = fakeCtx();
+    const storage = controlledPreferences(ctx, {
+      model: { providerID: "provider", modelID: "initial" },
+      variant: "default",
+    });
+    const { cleanup, disposeRoot } = await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
+    actions.openModelPicker();
+    const preference = openModelPicker.mock.calls[0]?.[3] as any;
+    const local = {
+      model: { providerID: "provider", modelID: "local" },
+      variant: "fast",
+    };
+    preference.set(local);
+    await flushPreferences();
+    storage.writes[0]();
+    await flushPreferences();
+
+    let observed: ResolvedModel | undefined;
+    const disposeObserver = createRoot((dispose) => {
+      createEffect(() => {
+        observed = preference.get();
+      });
+      return dispose;
+    });
+    const storedModel = storage.preferences.model;
+    const external = {
+      model: { providerID: "other", modelID: "external" },
+      variant: "high",
+    };
+    storage.setPreferences("model", reconcile(external));
+
+    expect(storage.preferences.model).toBe(storedModel);
+    expect(preference.get()).toEqual(external);
+    expect(observed).toEqual(external);
+
+    storage.setPreferences("model", "variant", "low");
+    expect(observed?.variant).toBe("low");
+    storage.setPreferences("model", null);
+    expect(preference.get()).toBeUndefined();
+    expect(observed).toBeUndefined();
+    disposeObserver();
+    cleanup();
+    disposeRoot();
+  });
+
+  it("keeps a reset to default while an earlier model write completes", async () => {
+    const ctx = fakeCtx();
+    const storage = controlledPreferences(ctx);
+    const { cleanup, disposeRoot } = await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
+    actions.openModelPicker();
+    const preference = openModelPicker.mock.calls[0]?.[3] as any;
+
+    preference.set({ model: { providerID: "provider", modelID: "old" } });
+    preference.set(undefined);
+    await flushPreferences();
+    storage.writes[0]();
+    await flushPreferences();
+    expect(preference.get()).toBeUndefined();
+
+    storage.writes[1]();
+    await flushPreferences();
+    expect(preference.get()).toBeUndefined();
+    expect(storage.preferences.model).toBeNull();
+    cleanup();
+    disposeRoot();
+  });
+
+  it("retains the selected model after a failed save and allows later writes", async () => {
+    const ctx = fakeCtx();
+    const storage = controlledPreferences(ctx);
+    const { cleanup, disposeRoot } = await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
+    actions.openModelPicker();
+    const preference = openModelPicker.mock.calls[0]?.[3] as any;
+    const selection = { model: { providerID: "provider", modelID: "selected" } };
+
+    preference.set(selection);
+    await flushPreferences();
+    storage.failures[0]();
+    await flushPreferences();
+    expect(preference.get()).toEqual(selection);
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Failed to save mini model preference." }),
+    );
+
+    preference.set(undefined);
+    await flushPreferences();
+    storage.writes[1]();
+    await flushPreferences();
+    expect(preference.get()).toBeUndefined();
+    expect(storage.preferences.model).toBeNull();
+    cleanup();
+    disposeRoot();
   });
 
   it("passes a remembered continue mode to new mini sessions", async () => {
