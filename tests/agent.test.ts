@@ -20,9 +20,9 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     keybind: "alt+b",
     freshKeybind: "alt+n",
     enableThinking: false,
-    toggleThinkingKeybind: "ctrl+t",
+    toggleThinkingKeybind: "alt+t",
     tools: [...DEFAULT_ALLOWED_TOOLS],
-    continueKeybind: "ctrl+y",
+    continueKeybind: "alt+y",
     ...overrides,
   };
 }
@@ -83,7 +83,10 @@ describe("config parsing", () => {
   });
 
   it("parses thinking keybind values", () => {
-    expect(parseConfig({}).toggleThinkingKeybind).toBe("ctrl+t");
+    expect(parseConfig({}).toggleThinkingKeybind).toBe("alt+t");
+    expect(
+      parseConfig({ toggleThinkingKeybind: "ctrl+t" }).toggleThinkingKeybind,
+    ).toBe("ctrl+t");
     expect(
       parseConfig({ toggleThinkingKeybind: " ctrl+r " }).toggleThinkingKeybind,
     ).toBe("ctrl+r");
@@ -141,7 +144,10 @@ describe("config parsing", () => {
   });
 
   it("parses the continue mode keybind", () => {
-    expect(parseConfig({}).continueKeybind).toBe("ctrl+y");
+    expect(parseConfig({}).continueKeybind).toBe("alt+y");
+    expect(parseConfig({ continueKeybind: "ctrl+y" }).continueKeybind).toBe(
+      "ctrl+y",
+    );
     expect(parseConfig({ continueKeybind: " ctrl+u " }).continueKeybind).toBe(
       "ctrl+u",
     );

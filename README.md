@@ -82,9 +82,9 @@ For V1 configuration and troubleshooting, use the [v1 README](https://github.com
 |---|---|
 | `enter` | Send question / follow-up (empty input does nothing) |
 | `shift+enter` (or `alt+c`) | Continue in the main thread, or copy the transcript, depending on the current mode |
-| `ctrl+y` (configurable) | Switch between **Continue** (queue) and **Copy** (clipboard); the button label updates immediately and the choice is remembered |
+| `alt+y` (configurable) | Switch between **Continue** (queue) and **Copy** (clipboard); the button label updates immediately and the choice is remembered |
 | `alt+b` or `alt+n` (configurable) | Hide overlay, resumable |
-| `ctrl+t` (configurable) | Toggle thinking blocks |
+| `alt+t` (configurable) | Toggle thinking blocks |
 | `tab` | Change the model for the next question |
 | `esc` / `ctrl+c` | Cancel and close |
 
@@ -103,11 +103,13 @@ All options are optional. Defaults are shown below.
 | `keybind` | `string \| false` | `"alt+b"` | Main mini-session keybind. Set to `false` or `"none"` to disable. |
 | `freshKeybind` | `string \| false` | `"alt+n"` | Fresh mini-session keybind. Set to `false` or `"none"` to disable. |
 | `enableThinking` | `boolean` | `false` | Show thinking blocks collapsed by default. |
-| `toggleThinkingKeybind` | `string \| false` | `"ctrl+t"` | Thinking toggle keybind inside the mini session. Set to `false` or `"none"` to disable. |
+| `toggleThinkingKeybind` | `string \| false` | `"alt+t"` | Thinking toggle keybind inside the mini session. Set to `false` or `"none"` to disable. |
 | `tools` | `string[]` | `["read","glob","grep","webfetch","websearch"]` | Read-only permission actions available to the plugin-managed mini agent. Supported: `read`, `glob`, `grep`, `webfetch`, `websearch`. Unknown or write-capable actions are ignored. An explicit empty list (or one that filters down to nothing) disables all tools. |
-| `continueKeybind` | `string \| false` | `"ctrl+y"` | Toggle between queueing the transcript in the main session and copying it to the clipboard (OSC 52) while the overlay is open. Set to `false` or `"none"` to disable. |
+| `continueKeybind` | `string \| false` | `"alt+y"` | Toggle between queueing the transcript in the main session and copying it to the clipboard (OSC 52) while the overlay is open. Set to `false` or `"none"` to disable. |
 
 The model chosen with `/mini-model`, the thinking toggle and the continue mode are remembered between restarts (per plugin storage). The handoff mode always uses **Copy handoff**; the toggle only applies to regular mini sessions.
+
+The default thinking and continue-mode shortcuts are now `alt+t` and `alt+y`. To keep the previous shortcuts, explicitly set `toggleThinkingKeybind` to `"ctrl+t"` and `continueKeybind` to `"ctrl+y"`.
 
 If you want to customize the plugin, your config should look something like this:
 
@@ -125,7 +127,7 @@ If you want to customize the plugin, your config should look something like this
         "enableThinking": true,
         "toggleThinkingKeybind": "alt+a",
         "tools": ["read", "glob", "grep", "webfetch", "websearch"],
-        "continueKeybind": "ctrl+y",
+        "continueKeybind": "alt+y",
         "agent": "build"
       }
     }

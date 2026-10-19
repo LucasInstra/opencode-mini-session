@@ -68,9 +68,9 @@ function config(overrides: Partial<MiniConfig> = {}): MiniConfig {
     keybind: "alt+b",
     freshKeybind: "alt+n",
     enableThinking: false,
-    toggleThinkingKeybind: "ctrl+t",
+    toggleThinkingKeybind: "alt+t",
     tools: ["read", "glob", "grep", "webfetch", "websearch"],
-    continueKeybind: "ctrl+y",
+    continueKeybind: "alt+y",
     ...overrides,
   };
 }

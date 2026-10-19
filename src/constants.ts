@@ -24,8 +24,8 @@ export const SCROLL_PAGE_DELTA = 14;
 export const DEFAULT_FULL_TOKEN_LIMIT = 50_000;
 export const DEFAULT_KEYBIND = "alt+b";
 export const DEFAULT_FRESH_KEYBIND = "alt+n";
-export const DEFAULT_TOGGLE_THINKING_KEYBIND = "ctrl+t";
-export const DEFAULT_CONTINUE_KEYBIND = "ctrl+y";
+export const DEFAULT_TOGGLE_THINKING_KEYBIND = "alt+t";
+export const DEFAULT_CONTINUE_KEYBIND = "alt+y";
 
 /**
  * Permission actions the mini agent may be granted. The list is deliberately

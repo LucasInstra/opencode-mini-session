@@ -16,9 +16,9 @@ function config(): MiniConfig {
     keybind: "alt+b",
     freshKeybind: "alt+n",
     enableThinking: false,
-    toggleThinkingKeybind: "ctrl+t",
+    toggleThinkingKeybind: "alt+t",
     tools: ["read"],
-    continueKeybind: "ctrl+y",
+    continueKeybind: "alt+y",
   };
 }
 
@@ -109,6 +109,22 @@ describe("global keymap commands", () => {
 });
 
 describe("panel keymap commands", () => {
+  it.each(["alt+t", "ctrl+t"])("uses the configured thinking shortcut %s", (bind) => {
+    const toggleThinking = vi.fn();
+    const commands = buildPanelCommands({
+      ...actions(),
+      config: { ...config(), toggleThinkingKeybind: bind },
+      toggleThinking,
+    });
+    const command = commands.find(
+      (candidate) => candidate.id === "mini.toggle-thinking",
+    );
+
+    expect(command?.bind).toBe(bind);
+    command?.run?.();
+    expect(toggleThinking).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["mini.continue", "shift+return"],
     ["mini.continue.fallback", "alt+c"],
@@ -125,17 +141,18 @@ describe("panel keymap commands", () => {
     expect(continueInMainThread).toHaveBeenCalledTimes(1);
   });
 
-  it("toggles the continue mode from the configured keybind", () => {
+  it.each(["alt+y", "ctrl+y"])("toggles the continue mode from %s", (bind) => {
     const toggleContinueMode = vi.fn();
     const commands = buildPanelCommands({
       ...actions(),
+      config: { ...config(), continueKeybind: bind },
       toggleContinueMode,
     });
 
     const toggle = commands.find(
       (command) => command.id === "mini.toggle-continue",
     );
-    expect(toggle?.bind).toBe("ctrl+y");
+    expect(toggle?.bind).toBe(bind);
     toggle?.run?.();
     expect(toggleContinueMode).toHaveBeenCalledTimes(1);
   });
