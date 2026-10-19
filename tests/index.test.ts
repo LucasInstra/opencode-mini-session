@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEffect, createRoot } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import type { ResolvedModel } from "../src/types";
+import type { MiniSessionOptions } from "../src/session";
+import type { OverlayState, ResolvedModel } from "../src/types";
 
 const {
   createOverlaySlot,
@@ -153,6 +154,67 @@ describe("plugin setup", () => {
 
     cleanup();
     expect(signal.aborted).toBe(true);
+  });
+
+  it.each([
+    { source: "command", visible: true },
+    { source: "command", visible: false },
+    { source: "keybind", visible: true },
+    { source: "keybind", visible: false },
+  ])("distinguishes /mini from the handoff hide/resume keybind: %j", async (trigger) => {
+    const ctx = fakeCtx();
+    let visible = true;
+    let current: MiniSessionOptions | undefined;
+    const onSubmit = vi.fn(() => true);
+    const controller = {
+      close: vi.fn(async () => current?.active.set(undefined)),
+      hide: vi.fn(() => {
+        visible = false;
+      }),
+      show: vi.fn(() => {
+        visible = true;
+      }),
+      isVisible: () => visible,
+    };
+    openMiniSession.mockImplementation((options) => {
+      current = options as MiniSessionOptions;
+      current.active.set(controller);
+      current.setOverlay({ state: {}, onSubmit } as unknown as OverlayState);
+      visible = true;
+      return true;
+    });
+    const { cleanup, disposeRoot } = await setupPlugin(ctx);
+    const actions = (createOverlaySlot.mock.calls[0]?.[0] as any).actions;
+
+    actions.triggerMiniMode("main", "command", "Generate a handoff", true);
+    await flushPreferences();
+    visible = trigger.visible;
+    actions.triggerMiniMode(
+      "main",
+      trigger.source,
+      trigger.source === "command" ? "ordinary question" : undefined,
+    );
+    await flushPreferences();
+
+    if (trigger.source === "command") {
+      expect(controller.close).toHaveBeenCalledTimes(1);
+      expect(openMiniSession).toHaveBeenCalledTimes(2);
+      expect(current?.handoff).not.toBe(true);
+      expect(current?.initialQuestion).toBe("ordinary question");
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      actions.triggerMiniMode("main", "command", "follow-up");
+      await flushPreferences();
+      expect(openMiniSession).toHaveBeenCalledTimes(2);
+      expect(onSubmit).toHaveBeenCalledExactlyOnceWith("follow-up");
+    } else {
+      expect(openMiniSession).toHaveBeenCalledTimes(1);
+      expect(controller.close).not.toHaveBeenCalled();
+      expect(visible).toBe(!trigger.visible);
+      expect(current?.handoff).toBe(true);
+    }
+    cleanup();
+    disposeRoot();
   });
 
   it("updates the model preference before the storage write completes", async () => {

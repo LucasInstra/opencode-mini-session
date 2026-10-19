@@ -42,6 +42,7 @@ export default Plugin.define({
     });
     let activeDialog: ActiveDialogController | undefined;
     let activeMode: MiniMode | undefined;
+    let activeHandoff = false;
     let disposed = false;
     const modelPickerOpen = { value: false };
 
@@ -196,7 +197,7 @@ export default Plugin.define({
         requestedMode: mode,
         activeMode,
         isVisible: activeDialog?.isVisible(),
-        forceReopen: handoff === true,
+        forceReopen: handoff === true || (source === "command" && activeHandoff),
       });
 
       await runMiniRouteAction({
@@ -215,6 +216,7 @@ export default Plugin.define({
                 activeDialog = dialog;
                 if (!dialog) {
                   activeMode = undefined;
+                  activeHandoff = false;
                   setOriginSessionID(undefined);
                 }
               },
@@ -232,11 +234,12 @@ export default Plugin.define({
           if (opened) {
             setOriginSessionID(sessionID);
             activeMode = mode;
+            activeHandoff = handoff === true;
           }
         },
       });
 
-      if (initialQuestion && nextAction !== "open") {
+      if (initialQuestion && nextAction === "show") {
         overlay()?.onSubmit(initialQuestion);
       }
     }
