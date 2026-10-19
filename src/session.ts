@@ -45,6 +45,7 @@ type ModelSelectValue =
     };
 
 type ErrorPath =
+  | "session.instructions throw"
   | "session.prompt throw"
   | "session.execution.failed event"
   | "session.create throw";
@@ -206,6 +207,7 @@ export async function startQuestion(options: MiniSessionOptions) {
   const previousFocus = ctx.renderer.currentFocusedRenderable;
   let resolvedAgent: ResolvedMiniAgent;
   let system = "";
+  let handoffInstructionsAttached = false;
   let lastPrompt: string | undefined;
 
   const dialogState: AnswerDialogState = {
@@ -702,12 +704,20 @@ export async function startQuestion(options: MiniSessionOptions) {
     dialogState.spinnerFrame = 0;
     followStreamingToBottom = true;
     forceScrollToBottom = true;
-    submissionModelQueue.push(getModelName());
-
     renderOverlay({ focusInput: true });
 
     void (async () => {
       try {
+        if (handoffMode && !handoffInstructionsAttached) {
+          await ctx.client.session.instructions.entry.put({
+            sessionID: promptSessionID,
+            key: SYSTEM_INSTRUCTION_KEY,
+            value: system,
+          });
+          handoffInstructionsAttached = true;
+          if (disposed() || generation !== submissionGeneration) return;
+        }
+        submissionModelQueue.push(getModelName());
         const resolvedModel = getResolvedModel();
         const nextModelKey = formatSessionModelKey(resolvedModel);
         if (nextModelKey !== sessionModelKey) {
@@ -729,7 +739,12 @@ export async function startQuestion(options: MiniSessionOptions) {
         );
       } catch (cause) {
         if (closed || generation !== submissionGeneration) return;
-        setPromptError("session.prompt throw", cause);
+        setPromptError(
+          handoffMode && !handoffInstructionsAttached
+            ? "session.instructions throw"
+            : "session.prompt throw",
+          cause,
+        );
         renderOverlay();
       }
     })();
@@ -761,7 +776,7 @@ export async function startQuestion(options: MiniSessionOptions) {
     tempSessionID = created.id;
     const ephemeralSessionID = tempSessionID;
 
-    if (system.trim()) {
+    if (system.trim() && !handoffMode) {
       try {
         await ctx.client.session.instructions.entry.put({
           sessionID: ephemeralSessionID,

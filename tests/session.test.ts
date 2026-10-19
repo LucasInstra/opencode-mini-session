@@ -1052,6 +1052,118 @@ describe("startQuestion", () => {
     );
   });
 
+  it("blocks handoff generation until instruction attachment succeeds on retry", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    const ctx = fakeCtx();
+    const handlers = captureHandlers(ctx);
+    const overlay = captureOverlay();
+    const putInstructions = ctx.client.session.instructions.entry.put;
+    putInstructions.mockRejectedValueOnce(new Error("instructions unavailable"));
+
+    await startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "focus on tests",
+      }),
+    );
+    await flushMicrotasks();
+
+    expect(putInstructions).toHaveBeenCalledTimes(1);
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    expect(ctx.client.session.remove).not.toHaveBeenCalled();
+    expect(overlay.get()?.state.error).toContain("instructions unavailable");
+    expect(overlay.get()?.state.errorDetail).toContain("session.instructions throw");
+    expect(overlay.get()?.state.loading).toBe(false);
+
+    const attachment = deferred<void>();
+    putInstructions.mockImplementationOnce(() => attachment.promise);
+    overlay.get()?.onRetry();
+    await flushMicrotasks();
+
+    expect(putInstructions).toHaveBeenCalledTimes(2);
+    expect(putInstructions.mock.calls[1][0]).toEqual(
+      putInstructions.mock.calls[0][0],
+    );
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    expect(overlay.get()?.state.loading).toBe(true);
+
+    attachment.resolve();
+    await flushMicrotasks();
+
+    expect(ctx.client.session.prompt).toHaveBeenCalledExactlyOnceWith({
+      sessionID: "mini-session",
+      text: "focus on tests",
+    });
+    expect(overlay.get()?.state.error).toBeUndefined();
+
+    handlers["session.idle"]({ data: { sessionID: "mini-session" } });
+    await flushMicrotasks();
+    expect(overlay.get()?.onSubmit("make it shorter")).toBe(true);
+    await flushMicrotasks();
+    expect(putInstructions).toHaveBeenCalledTimes(2);
+    expect(ctx.client.session.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send a handoff after closing while instructions are attaching", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    const ctx = fakeCtx();
+    const overlay = captureOverlay();
+    const attachment = deferred<void>();
+    ctx.client.session.instructions.entry.put.mockImplementationOnce(
+      () => attachment.promise,
+    );
+
+    const opening = startQuestion(
+      startOptions({
+        ctx,
+        setOverlay: overlay.set,
+        handoff: true,
+        initialQuestion: "Generate a handoff",
+      }),
+    );
+    await flushMicrotasks();
+    overlay.get()?.onClose();
+    await flushMicrotasks();
+    attachment.resolve();
+    await opening;
+    await flushMicrotasks();
+
+    expect(ctx.client.session.prompt).not.toHaveBeenCalled();
+    expect(ctx.client.session.remove).toHaveBeenCalledWith({
+      sessionID: "mini-session",
+    });
+    expect(overlay.get()).toBeUndefined();
+  });
+
+  it("preserves best-effort instruction attachment for ordinary mini sessions", async () => {
+    vi.useFakeTimers();
+    resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
+    const ctx = fakeCtx();
+    ctx.client.session.instructions.entry.put.mockRejectedValueOnce(
+      new Error("instructions unavailable"),
+    );
+
+    await startQuestion(
+      startOptions({ ctx, initialQuestion: "ordinary question" }),
+    );
+    await flushMicrotasks();
+
+    expect(ctx.ui.toast.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant: "warning",
+        message: "Failed to attach mini instructions: instructions unavailable",
+      }),
+    );
+    expect(ctx.client.session.prompt).toHaveBeenCalledWith({
+      sessionID: "mini-session",
+      text: "ordinary question",
+    });
+  });
+
   it("falls back when the persisted model is no longer available", async () => {
     vi.useFakeTimers();
     resolveRuntimeMiniAgent.mockResolvedValue(resolvedAgent());
